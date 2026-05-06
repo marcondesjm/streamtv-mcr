@@ -209,6 +209,6 @@ Feito com 💜 para criadores de conteúdo que nunca dormem.<br/>
 
 <br/><br/>
 
-⭐ Se este projeto te ajudou, considere deixar uma estrela no GitHub!
+⭐ Se este projeto te ajudou, considere deixar uma estrela no GitHub! para doação PIX 48996029392 Marcondes Jorge Machado.
 
 </div>
