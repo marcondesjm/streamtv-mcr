@@ -1,0 +1,228 @@
+        {activeTab === 'schedule' && (
+          <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+            <div className="schedule-container" style={{ flex: 1, padding: '30px', overflowY: 'auto' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                <p style={{ margin: 0 }}>Monte a grade selecionando os vídeos no painel lateral.</p>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>Exibindo grade de:</span>
+                  <input 
+                    type="date" 
+                    value={viewDate} 
+                    onChange={(e) => setViewDate(e.target.value)}
+                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'white', border: '1px solid var(--border-color)', padding: '5px 10px', borderRadius: '4px', outline: 'none', fontSize: '14px' }}
+                  />
+                </div>
+              </div>
+              
+              <div className="timeline" ref={timelineRef}>
+                <div style={{ display: 'flex' }}>
+                  <div style={{ width: '150px', flexShrink: 0, backgroundColor: 'var(--bg-secondary)', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)' }}></div>
+                  <div className="time-header" style={{ flex: 1, borderBottom: '1px solid var(--border-color)', display: 'flex', position: 'relative' }}>
+                    {times.map(time => (
+                      <div key={time} className="time-slot" style={{ minWidth: '100px', flexShrink: 0, padding: '10px 0', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '12px', borderRight: '1px solid rgba(255,255,255,0.05)' }}>{time}</div>
+                    ))}
+                    
+                    {/* Marcador de Hora Atual (Linha Vermelha) */}
+                    {viewDate === currentTimeTick.toISOString().split('T')[0] && (
+                      <div style={{ 
+                        position: 'absolute', 
+                        top: 0, 
+                        bottom: 0, 
+                        left: `${timeMarkerLeft}px`, 
+                        width: '2px', 
+                        backgroundColor: '#ef4444', 
+                        zIndex: 100,
+                        boxShadow: '0 0 8px rgba(239, 68, 68, 0.6)',
+                        pointerEvents: 'none'
+                      }}>
+                        <div style={{ position: 'sticky', top: 0, backgroundColor: '#ef4444', color: 'white', fontSize: '10px', padding: '2px 4px', borderRadius: '0 0 4px 4px', fontWeight: 'bold' }}>
+                          {currentTimeTick.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                
+                {channels.map(channel => (
+                  <div key={channel.id} style={{ display: 'flex', borderBottom: '1px solid var(--border-color)' }}>
+                    <div style={{ 
+                      width: '150px', 
+                      flexShrink: 0, 
+                      backgroundColor: 'var(--bg-secondary)', 
+                      borderRight: '1px solid var(--border-color)', 
+                      padding: '20px 10px', 
+                      display: 'flex',
+                      alignItems: 'center',
+                      fontWeight: 'bold',
+                      color: 'white',
+                      position: 'sticky',
+                      left: 0,
+                      zIndex: 5
+                    }}>
+                      {channel.name}
+                    </div>
+                    <div className="channels-area" style={{ position: 'relative', height: '100px', flex: 1 }}>
+                        {/* Marcador de Hora Atual estendido para os canais */}
+                        {viewDate === currentTimeTick.toISOString().split('T')[0] && (
+                          <div style={{ 
+                            position: 'absolute', 
+                            top: 0, 
+                            bottom: 0, 
+                            left: `${timeMarkerLeft}px`, 
+                            width: '1px', 
+                            backgroundColor: 'rgba(239, 68, 68, 0.3)', 
+                            zIndex: 90,
+                            pointerEvents: 'none'
+                          }} />
+                        )}
+                        
+                        {scheduledPrograms.filter(p => p.channelId === channel.id && p.date === viewDate).length === 0 && <p style={{ padding: '20px', color: 'var(--text-secondary)' }}>Nenhum vídeo para este dia.</p>}
+                        {scheduledPrograms.filter(p => p.channelId === channel.id && p.date === viewDate).map(program => {
+                          const isNow = liveProgram?.id === program.id;
+                          return (
+                            <div 
+                              key={program.id} 
+                              className={`program-block ${isNow ? 'program-on-air' : ''}`}
+                              style={{ 
+                                ...getBlockStyle(program), 
+                                backgroundColor: isNow ? 'rgba(239, 68, 68, 0.2)' : undefined,
+                                border: isNow ? '1px solid #ef4444' : undefined,
+                                boxShadow: isNow ? '0 0 10px rgba(239, 68, 68, 0.3)' : undefined,
+                                zIndex: isNow ? 10 : 1
+                              }}
+                            >
+                              <button
+                                onClick={(e) => { e.stopPropagation(); handleDeleteProgram(program.id); }}
+                                title="Remover da grade"
+                                style={{ position: 'absolute', top: '3px', right: '3px', background: 'rgba(220,38,38,0.85)', color: 'white', border: 'none', borderRadius: '2px', cursor: 'pointer', fontSize: '10px', padding: '1px 5px', lineHeight: '1.4', zIndex: 10 }}
+                              >✕</button>
+                              
+                              {isNow && (
+                                <div style={{ position: 'absolute', top: '-12px', left: '50%', transform: 'translateX(-50%)', backgroundColor: '#ef4444', color: 'white', fontSize: '9px', fontWeight: 'bold', padding: '2px 6px', borderRadius: '10px', whiteSpace: 'nowrap', zIndex: 20, boxShadow: '0 2px 4px rgba(0,0,0,0.3)' }}>
+                                  ● AO VIVO
+                                </div>
+                              )}
+                              
+                              <div className="program-title" style={{ fontWeight: isNow ? 'bold' : 'normal', fontSize: '12px' }}>{program.video.title}</div>
+                              <div className="program-time" style={{ fontSize: '10px', opacity: 0.8 }}>{program.startTime} - {formatTime( (program.startTime.split(':').map(Number)[0] * 3600 + program.startTime.split(':').map(Number)[1] * 60 + program.durationMinutes * 60) ).substring(0, 5)}</div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ width: '320px', backgroundColor: 'var(--bg-secondary)', borderLeft: '1px solid var(--border-color)', padding: '30px', overflowY: 'auto', flexShrink: 0 }}>
+              <h3 style={{ marginTop: 0, borderBottom: '1px solid var(--border-color)', paddingBottom: '10px' }}>Criar Novo Programa</h3>
+              <div className="editor-form" style={{ marginBottom: '30px' }}>
+                <input 
+                  type="text" 
+                  value={newChannelName}
+                  onChange={(e) => setNewChannelName(e.target.value)}
+                  placeholder="Nome do Programa (ex: Reacts)"
+                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'white', border: '1px solid var(--border-color)', padding: '8px', borderRadius: '2px', outline: 'none', width: '100%' }}
+                />
+                <button className="btn-connect" style={{ marginTop: '10px', backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }} onClick={handleAddChannel}>
+                  + Criar Fileira
+                </button>
+              </div>
+
+              <h3 style={{ marginTop: 0, borderBottom: '1px solid var(--border-color)', paddingBottom: '10px' }}>Adicionar à Grade</h3>
+              <div className="editor-form">
+                <label>Fileira / Programa:</label>
+                <select value={selectedChannelId} onChange={(e) => setSelectedChannelId(e.target.value)}>
+                  {channels.map(c => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+
+                <label style={{ marginTop: '15px' }}>Escolha a Fonte:</label>
+                <select value={selectedVideoId} onChange={(e) => setSelectedVideoId(e.target.value)}>
+                  <option value="">-- VODs --</option>
+                  {videos.map(v => (
+                    <option key={v.id} value={v.id}>{v.title} ({v.duration})</option>
+                  ))}
+                  <option value="" disabled>──────────</option>
+                  <option value="__camera__">📸 Câmera ao Vivo (Notebook/Externa)</option>
+                  <option value="__webradio__">📻 Rádio Web</option>
+                </select>
+
+                {(selectedVideoId === '__camera__' || selectedVideoId === '__webradio__') && (
+                  <>
+                    <label style={{ marginTop: '10px' }}>Duração Estimada (minutos):</label>
+                    <input 
+                      type="number" 
+                      value={customDuration} 
+                      onChange={(e) => setCustomDuration(e.target.value)}
+                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'white', border: '1px solid var(--border-color)', padding: '8px', borderRadius: '2px', outline: 'none', width: '100px' }}
+                    />
+                  </>
+                )}
+
+                {selectedVideoId === '__webradio__' && (
+                  <>
+                    <label style={{ marginTop: '10px' }}>URL do Stream da Rádio (mp3/aac):</label>
+                    <input 
+                      type="text" 
+                      value={radioUrl} 
+                      onChange={(e) => setRadioUrl(e.target.value)}
+                      placeholder="Ex: http://stream.radio.com:8000/live.mp3"
+                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'white', border: '1px solid var(--border-color)', padding: '8px', borderRadius: '2px', outline: 'none', width: '100%' }}
+                    />
+                    <label style={{ marginTop: '10px' }}>Banner de Fundo (PNG/JPG):</label>
+                    <input 
+                      type="text" 
+                      value={bannerUrl} 
+                      onChange={(e) => setBannerUrl(e.target.value)}
+                      placeholder="URL da imagem (ou base64)"
+                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'white', border: '1px solid var(--border-color)', padding: '8px', borderRadius: '2px', outline: 'none', width: '100%' }}
+                    />
+                  </>
+                )}
+
+                <label style={{ marginTop: '15px' }}>Horário de Início:</label>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <input 
+                    type="date" 
+                    value={selectedDate} 
+                    onChange={(e) => setSelectedDate(e.target.value)}
+                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'white', border: '1px solid var(--border-color)', padding: '8px', borderRadius: '2px', outline: 'none', flex: 1 }}
+                  />
+                  <input 
+                    type="time" 
+                    value={selectedTime} 
+                    onChange={(e) => setSelectedTime(e.target.value)}
+                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'white', border: '1px solid var(--border-color)', padding: '8px', borderRadius: '2px', outline: 'none', width: '100px' }}
+                  />
+                </div>
+                
+                <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '5px' }}>
+                  {times.map(t => (
+                    <button 
+                      key={t} 
+                      onClick={() => setSelectedTime(t)}
+                      style={{ 
+                        backgroundColor: selectedTime === t ? 'var(--accent-color)' : 'var(--bg-tertiary)', 
+                        color: 'white', 
+                        border: '1px solid var(--border-color)', 
+                        padding: '4px 8px', 
+                        borderRadius: '2px', 
+                        fontSize: '12px',
+                        cursor: 'pointer',
+                        transition: '0.2s'
+                      }}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+                
+                <button className="btn-connect" style={{ marginTop: '20px', backgroundColor: 'var(--accent-color)' }} onClick={handleAddProgram}>
+                  + Agendar Vídeo
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
