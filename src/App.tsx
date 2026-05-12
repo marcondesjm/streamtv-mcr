@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, Component, type ErrorInfo } from 'react';
+import React, { useState, useEffect, useRef, Component, startTransition, type ErrorInfo } from 'react';
 import './App.css';
 import { fetchTwitchVods, fetchYouTubeVideos, type VideoItem, type GospelNews } from './services/api';
 import { speakTts } from './services/tts';
@@ -487,10 +487,17 @@ function App() {
     });
   };
 
+  // Utility: defer heavy work so the browser can paint UI feedback first
+  const deferHeavyWork = (fn: () => void) => {
+    requestAnimationFrame(() => setTimeout(fn, 0));
+  };
+
   const handleConnectLocal = async () => {
     if (connections.local) {
-      setConnections(prev => ({ ...prev, local: false }));
-      setVideos(prev => prev.filter(v => v.platform !== 'local'));
+      startTransition(() => {
+        setConnections(prev => ({ ...prev, local: false }));
+        setVideos(prev => prev.filter(v => v.platform !== 'local'));
+      });
       return;
     }
     try {
@@ -500,25 +507,36 @@ function App() {
         const files = await ipcRenderer.invoke('select-folder');
         if (files && files.length > 0) {
           setLoading(true);
-          const localVideos = await Promise.all(files.map(async (f: any) => {
-            const durationSeconds = await getLocalVideoDuration(f.path);
-            return {
-              id: f.path, // ID armazena o file:/// path para podermos tocar no player
-              title: f.name,
-              duration: formatTime(Math.round(durationSeconds)),
-              thumbnail: 'https://images.unsplash.com/photo-1611162617474-5b21e879e113?auto=format&fit=crop&w=400&q=80',
-              platform: 'local',
-              date: new Date().toLocaleDateString()
-            };
-          }));
+          // Process videos in chunks to avoid blocking the UI thread
+          const CHUNK_SIZE = 5;
+          const allVideos: VideoItem[] = [];
+          for (let i = 0; i < files.length; i += CHUNK_SIZE) {
+            const chunk = files.slice(i, i + CHUNK_SIZE);
+            const chunkResults = await Promise.all(chunk.map(async (f: any) => {
+              const durationSeconds = await getLocalVideoDuration(f.path);
+              return {
+                id: f.path,
+                title: f.name,
+                duration: formatTime(Math.round(durationSeconds)),
+                thumbnail: 'https://images.unsplash.com/photo-1611162617474-5b21e879e113?auto=format&fit=crop&w=400&q=80',
+                platform: 'local' as const,
+                date: new Date().toLocaleDateString()
+              } as VideoItem;
+            }));
+            allVideos.push(...chunkResults);
+            // Yield to UI thread between chunks
+            await new Promise(r => setTimeout(r, 0));
+          }
           
-          setVideos(prev => {
-            const others = prev.filter(v => v.platform !== 'local');
-            return [...others, ...localVideos];
+          startTransition(() => {
+            setVideos(prev => {
+              const others = prev.filter(v => v.platform !== 'local');
+              return [...others, ...allVideos];
+            });
+            setConnections(prev => ({ ...prev, local: true }));
+            setLoading(false);
           });
-          setConnections(prev => ({ ...prev, local: true }));
-          setLoading(false);
-          alert(`Importados ${localVideos.length} vídeos locais com sucesso!`);
+          deferHeavyWork(() => alert(`Importados ${allVideos.length} vídeos locais com sucesso!`));
         }
       } else {
         // Fallback: seletor de arquivo nativo do browser
@@ -526,7 +544,7 @@ function App() {
       }
     } catch(err) {
       alert(`Falha ao ler pasta: ${err}`);
-      setLoading(false);
+      deferHeavyWork(() => setLoading(false));
     }
   };
 
@@ -534,25 +552,36 @@ function App() {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
     setLoading(true);
-    const localVideos = await Promise.all(files.map(async (file) => {
-      const url = URL.createObjectURL(file);
-      const durationSeconds = await getLocalVideoDuration(url);
-      return {
-        id: url,
-        title: file.name.replace(/\.[^/.]+$/, ''),
-        duration: formatTime(Math.round(durationSeconds)),
-        thumbnail: 'https://images.unsplash.com/photo-1611162617474-5b21e879e113?auto=format&fit=crop&w=400&q=80',
-        platform: 'local' as const,
-        date: new Date().toLocaleDateString()
-      };
-    }));
-    setVideos(prev => {
-      const others = prev.filter(v => v.platform !== 'local');
-      return [...others, ...localVideos];
+    // Process in chunks to avoid blocking
+    const CHUNK_SIZE = 5;
+    const localVideos: VideoItem[] = [];
+    for (let i = 0; i < files.length; i += CHUNK_SIZE) {
+      const chunk = files.slice(i, i + CHUNK_SIZE);
+      const chunkResults = await Promise.all(chunk.map(async (file) => {
+        const url = URL.createObjectURL(file);
+        const durationSeconds = await getLocalVideoDuration(url);
+        return {
+          id: url,
+          title: file.name.replace(/\.[^/.]+$/, ''),
+          duration: formatTime(Math.round(durationSeconds)),
+          thumbnail: 'https://images.unsplash.com/photo-1611162617474-5b21e879e113?auto=format&fit=crop&w=400&q=80',
+          platform: 'local' as const,
+          date: new Date().toLocaleDateString()
+        } as VideoItem;
+      }));
+      localVideos.push(...chunkResults);
+      // Yield to UI thread
+      await new Promise(r => setTimeout(r, 0));
+    }
+    startTransition(() => {
+      setVideos(prev => {
+        const others = prev.filter(v => v.platform !== 'local');
+        return [...others, ...localVideos];
+      });
+      setConnections(prev => ({ ...prev, local: true }));
+      setLoading(false);
     });
-    setConnections(prev => ({ ...prev, local: true }));
-    setLoading(false);
-    alert(`Importados ${localVideos.length} vídeo(s) com sucesso!`);
+    deferHeavyWork(() => alert(`Importados ${localVideos.length} vídeo(s) com sucesso!`));
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -593,18 +622,22 @@ function App() {
       video = { id: '__webradio__', title: 'Rádio Web', duration: `${customDuration}:00`, thumbnail: '', platform: 'webradio', date: new Date().toISOString(), radioUrl, bannerUrl };
     }
 
-    if (!video) return alert("Selecione um vídeo ou fonte!");
+    if (!video) {
+      deferHeavyWork(() => alert("Selecione um vídeo ou fonte!"));
+      return;
+    }
     
     const exists = scheduledPrograms.find(p => p.date === selectedDate && p.startTime === selectedTime && p.channelId === selectedChannelId);
     if (exists) {
-      return alert("Já existe um vídeo agendado para este dia e horário neste programa!");
+      deferHeavyWork(() => alert("Já existe um vídeo agendado para este dia e horário neste programa!"));
+      return;
     }
 
     let duration = selectedVideoId === '__camera__' || selectedVideoId === '__webradio__' 
       ? parseInt(customDuration) || 60 
       : Math.round(parseDuration(video.duration));
       
-    if (duration < 1) duration = 1; // Força no mínimo 1 minuto
+    if (duration < 1) duration = 1;
 
     const newProgram: ScheduledProgram = {
       id: Date.now().toString(),
@@ -615,15 +648,22 @@ function App() {
       channelId: selectedChannelId
     };
 
-    setScheduledPrograms(prev => [...prev, newProgram].sort((a, b) => a.startTime.localeCompare(b.startTime)));
+    startTransition(() => {
+      setScheduledPrograms(prev => [...prev, newProgram].sort((a, b) => a.startTime.localeCompare(b.startTime)));
+    });
   };
 
   const handleAddChannel = () => {
-    if (!newChannelName.trim()) return alert("Digite o nome do Programa!");
+    if (!newChannelName.trim()) {
+      deferHeavyWork(() => alert("Digite o nome do Programa!"));
+      return;
+    }
     const newChan = { id: Date.now().toString(), name: newChannelName };
-    setChannels(prev => [...prev, newChan]);
-    setSelectedChannelId(newChan.id);
-    setNewChannelName('');
+    startTransition(() => {
+      setChannels(prev => [...prev, newChan]);
+      setSelectedChannelId(newChan.id);
+      setNewChannelName('');
+    });
   };
 
   const handleDeleteProgram = (id: string) => {
