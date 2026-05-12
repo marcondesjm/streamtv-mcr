@@ -55,6 +55,10 @@ O **StreamTV** é uma aplicação desktop open-source que permite a criadores de
 | **🔗 OAuth Nativo** | Vincule Twitch e YouTube via fluxo OAuth real — sem abrir browser externo. Tokens obtidos diretamente pelo Electron. |
 | **📡 Streaming RTMP** | Transmita sua grade ao vivo via FFmpeg para YouTube, Twitch, Facebook ou qualquer servidor RTMP customizado. |
 | **🎬 Auto-Switch** | Enquanto em stream, troca automaticamente entre o vídeo da grade e um screensaver animado quando não há conteúdo agendado. |
+| **🤖 Virtual Announcer** | Locutor automatizado com síntese de voz (TTS) — anuncia programas, horários e notícias gospel em tempo real com soundboard integrada. |
+| **📰 Gospel News** | Módulo de notícias gospel com feed atualizado automaticamente, categorias visuais e integração com o locutor virtual. |
+| **🎧 Auto DJ Center** | Playout inteligente com fila automática, shuffle, loop, comerciais programados e anúncio de hora falado. |
+| **🗣️ TTS Engine** | Serviço de texto-para-fala que envia locuções para o sistema e injeta voz no stream RTMP ao vivo via Electron/SAPI. |
 | **💾 Persistência Local** | Toda a grade, canais e configurações são salvas em JSON local — nenhum dado vai para a nuvem. |
 | **🎨 Dark Mode Premium** | Interface ultra-dark, flat design, sem arredondamentos — foco total no conteúdo. |
 
@@ -142,8 +146,12 @@ StreamTV/
 │   ├── App.tsx            # Componente raiz (toda a lógica da aplicação)
 │   ├── App.css            # Estilos da interface principal
 │   ├── index.css          # Design tokens e reset global
+│   ├── AutoDJ.tsx         # Playout inteligente com fila automática, shuffle e comerciais
+│   ├── GospelNews.tsx     # Feed de notícias gospel com categorias visuais
+│   ├── VirtualAnnouncer.tsx # Locutor virtual com TTS e soundboard integrada
 │   └── services/
-│       └── api.ts         # Integrações Twitch Helix & YouTube Data API v3
+│       ├── api.ts         # Integrações Twitch Helix & YouTube Data API v3
+│       └── tts.ts         # Serviço de texto-para-fala para stream ao vivo
 ├── package.json
 ├── vite.config.ts
 └── README.md
