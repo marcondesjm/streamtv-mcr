@@ -578,6 +578,22 @@ const MCRPro: React.FC<MCRProProps> = ({ videos, isStreaming, overlayConfig, onU
             style={{ backgroundColor: channels.length < 8 ? '#065f46' : '#1f2937', color: channels.length < 8 ? '#4ade80' : '#6b7280', border:'none', borderRadius:'2px', padding:'4px 12px', cursor: channels.length < 8 ? 'pointer' : 'not-allowed', fontSize:'10px', fontWeight:'bold' }}>
             {t.addChannel} ({channels.length}/8)
           </button>
+          <div style={{ width:'1px', height:'20px', backgroundColor:'#1e1e2e' }} />
+          <button 
+            onClick={() => {
+              const cfg = JSON.parse(localStorage.getItem('autodj-config') || '{"enabled":false}');
+              cfg.enabled = !cfg.enabled;
+              localStorage.setItem('autodj-config', JSON.stringify(cfg));
+              // Force a state update if needed, but App.tsx will pick it up on next tick
+              window.dispatchEvent(new Event('storage')); 
+            }}
+            style={{ 
+              backgroundColor: JSON.parse(localStorage.getItem('autodj-config') || '{"enabled":false}').enabled ? '#7c3aed' : '#1f2937', 
+              color:'#fff', border:'none', borderRadius:'2px', padding:'4px 12px', cursor:'pointer', fontSize:'10px', fontWeight:'bold' 
+            }}
+          >
+            🎵 AUTO DJ: {JSON.parse(localStorage.getItem('autodj-config') || '{"enabled":false}').enabled ? 'ON' : 'OFF'}
+          </button>
         </div>
       </div>
 

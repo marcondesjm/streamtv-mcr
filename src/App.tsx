@@ -1,7 +1,11 @@
 import React, { useState, useEffect, useRef, Component, type ErrorInfo } from 'react';
 import './App.css';
-import { fetchTwitchVods, fetchYouTubeVideos, type VideoItem } from './services/api';
+import { fetchTwitchVods, fetchYouTubeVideos, type VideoItem, type GospelNews } from './services/api';
+import { speakTts } from './services/tts';
 import MCRPro from './MCRPro';
+import AutoDJ from './AutoDJ';
+import VirtualAnnouncer from './VirtualAnnouncer';
+import GospelNewsComponent from './GospelNews';
 
 class ErrorBoundary extends Component<{children: React.ReactNode}, {hasError: boolean, error: Error | null}> {
   constructor(props: {children: React.ReactNode}) {
@@ -46,7 +50,7 @@ const CameraView: React.FC = () => {
   return <video ref={vidRef} autoPlay muted style={{ width: '100%', height: '100%', objectFit: 'contain', backgroundColor: '#000' }} />;
 };
 
-const WebRadioView: React.FC<{ radioUrl?: string; bannerUrl?: string }> = ({ radioUrl, bannerUrl }) => {
+const WebRadioView: React.FC<{ radioUrl?: string; bannerUrl?: string; radioVolume?: number }> = ({ radioUrl, bannerUrl, radioVolume = 1 }) => {
   const [imgError, setImgError] = useState(false);
   
   // Converter caminho local para URL válida no Electron se necessário
@@ -81,7 +85,7 @@ const WebRadioView: React.FC<{ radioUrl?: string; bannerUrl?: string }> = ({ rad
       {radioUrl && (
         <div style={{ position: 'absolute', bottom: '20px', zIndex: 10, width: '90%', textAlign: 'center' }}>
           <div style={{ color: '#aaa', fontSize: '12px', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '1px' }}>Sinal de Áudio Ativo</div>
-          <audio src={radioUrl} autoPlay loop style={{ width: '100%' }} />
+          <audio src={radioUrl} autoPlay loop style={{ width: '100%' }} volume={radioVolume} />
           <div style={{ height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', overflow: 'hidden', marginTop: '10px' }}>
             <div style={{ width: '100%', height: '100%', background: 'linear-gradient(90deg, #646cff, #ef4444)', animation: 'progress-shimmer 2s infinite' }} />
           </div>
@@ -154,13 +158,15 @@ function App() {
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [connections, setConnections] = useState<{ twitch: string | null, youtube: string | null, local: boolean }>({ twitch: null, youtube: null, local: false });
   const [loading, setLoading] = useState(false);
+  const [librarySearch, setLibrarySearch] = useState('');
+  const [libraryFilter, setLibraryFilter] = useState<'all' | 'local' | 'youtube' | 'twitch'>('all');
   
   // Phase 3: Schedule State
   const [scheduledPrograms, setScheduledPrograms] = useState<ScheduledProgram[]>([]);
   const [selectedVideoId, setSelectedVideoId] = useState('');
-  const [customDuration, setCustomDuration] = useState('60');
-  const [radioUrl, setRadioUrl] = useState('');
-  const [bannerUrl, setBannerUrl] = useState('');
+  const [customDuration] = useState('60');
+  const [radioUrl] = useState('');
+  const [bannerUrl] = useState('');
   const [fallbackRadioUrl, setFallbackRadioUrl] = useState(() => localStorage.getItem('fallbackRadioUrl') || 'https://stm.painelvox.net:7012/stream');
   const [fallbackBannerUrl, setFallbackBannerUrl] = useState(() => localStorage.getItem('fallbackBannerUrl') || 'https://www.radioieqpc.com.br/public/04066-2024-02-19.jpg');
   const [selectedTime, setSelectedTime] = useState('14:00');
@@ -171,12 +177,15 @@ function App() {
   const [autoFallback, setAutoFallback] = useState(() => localStorage.getItem('autoFallback') === 'true');
   const [selectedChannelId, setSelectedChannelId] = useState('c1');
   const [newChannelName, setNewChannelName] = useState('');
+  const [radioVolume, setRadioVolume] = useState(1); // 0-1, controla volume do rádio
+
+  // URL Input State
+  const [youtubeUrlInput, setYoutubeUrlInput] = useState('');
 
   // API Keys State
   const [twitchClientId, setTwitchClientId] = useState('');
   const [youtubeClientId, setYoutubeClientId] = useState('');
   const [youtubeClientSecret, setYoutubeClientSecret] = useState('');
-  const [keysSaved, setKeysSaved] = useState(false);
   const [ytError, setYtError] = useState('');
 
   // Overlay State
@@ -220,6 +229,8 @@ function App() {
     updateLayer(draggingId, { x, y });
   };
 
+  const [showStreamKey, setShowStreamKey] = useState(false);
+
   // RTMP Streaming State
   const [rtmpUrl, setRtmpUrl] = useState(() => localStorage.getItem('rtmpUrl') || 'rtmp://gru02.contribute.live-video.net/app');
   const [streamKey, setStreamKey] = useState(() => localStorage.getItem('streamKey') || 'live_1492739470_skWF8fBFUcNr0h5Olhw7yljHElvfGK');
@@ -233,11 +244,6 @@ function App() {
   // Phase 4: Live Player State
   const [currentTimeTick, setCurrentTimeTick] = useState(new Date());
 
-  const times = Array.from({ length: 48 }, (_, i) => {
-    const h = Math.floor(i / 2);
-    const m = (i % 2) * 30;
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-  });
 
   // Helper to parse "HH:MM:SS" or "MM:SS" into minutes
   const parseDuration = (durationStr: string) => {
@@ -325,6 +331,37 @@ function App() {
             setConnections(prev => ({ ...prev, local: true }));
           }
           console.log('[StreamTV] Dados restaurados com sucesso.');
+        } else {
+          // Nenhum dado salvo - criar dados de demonstração para a simulação
+          console.log('[StreamTV] Inicializando dados de demonstração...');
+          
+          // Vídeos de demonstração
+          const demoVideos: VideoItem[] = [
+            { id: 'demo-1', title: '🎵 Louvor IEQ - Domingo de Manhã', duration: '00:42:30', thumbnail: 'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?auto=format&fit=crop&w=400&q=80', platform: 'local', date: new Date().toLocaleDateString() },
+            { id: 'demo-2', title: '📖 Estudo Bíblico - João 3:16', duration: '01:15:00', thumbnail: 'https://images.unsplash.com/photo-1504052434568-70ad5836ab65?auto=format&fit=crop&w=400&q=80', platform: 'local', date: new Date().toLocaleDateString() },
+            { id: 'demo-3', title: '🙏 Culto IEQ - Pregação', duration: '02:05:00', thumbnail: 'https://images.unsplash.com/photo-1438232992991-995b7058bbb3?auto=format&fit=crop&w=400&q=80', platform: 'local', date: new Date().toLocaleDateString() },
+            { id: 'demo-4', title: '🎤 Testemunhos - Série Especial', duration: '00:55:00', thumbnail: 'https://images.unsplash.com/photo-1478737270239-2f02b77fc618?auto=format&fit=crop&w=400&q=80', platform: 'local', date: new Date().toLocaleDateString() },
+            { id: 'demo-5', title: '🎶 Grupo de Jovens - Ao Vivo', duration: '01:30:00', thumbnail: 'https://images.unsplash.com/photo-1516450360452-9312f5e86fc7?auto=format&fit=crop&w=400&q=80', platform: 'local', date: new Date().toLocaleDateString() },
+            { id: 'demo-6', title: '📺 IEQ TV - Programa Especial', duration: '02:30:00', thumbnail: 'https://images.unsplash.com/photo-1504384308090-c894fdcc538d?auto=format&fit=crop&w=400&q=80', platform: 'local', date: new Date().toLocaleDateString() },
+            { id: 'demo-7', title: '🎬 Documentário: História da Igreja', duration: '01:45:00', thumbnail: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80', platform: 'local', date: new Date().toLocaleDateString() },
+            { id: 'demo-8', title: '🎙️ Podcast IEQ - Entrevistas', duration: '01:00:00', thumbnail: 'https://images.unsplash.com/photo-1478737270239-2f02b77fc618?auto=format&fit=crop&w=400&q=80', platform: 'local', date: new Date().toLocaleDateString() },
+          ];
+          setVideos(demoVideos);
+          setConnections(prev => ({ ...prev, local: true }));
+
+          // Programação de demonstração para hoje
+          const todayStr = new Date().toISOString().split('T')[0];
+          const demoPrograms: ScheduledProgram[] = [
+            { id: 'sched-1', video: demoVideos[1], date: todayStr, startTime: '08:00', durationMinutes: 60, channelId: 'c1' },
+            { id: 'sched-2', video: demoVideos[2], date: todayStr, startTime: '09:30', durationMinutes: 90, channelId: 'c1' },
+            { id: 'sched-3', video: demoVideos[0], date: todayStr, startTime: '12:00', durationMinutes: 45, channelId: 'c1' },
+            { id: 'sched-4', video: demoVideos[5], date: todayStr, startTime: '14:00', durationMinutes: 120, channelId: 'c1' },
+            { id: 'sched-5', video: demoVideos[3], date: todayStr, startTime: '17:00', durationMinutes: 55, channelId: 'c1' },
+            { id: 'sched-6', video: demoVideos[4], date: todayStr, startTime: '19:00', durationMinutes: 90, channelId: 'c1' },
+            { id: 'sched-7', video: demoVideos[6], date: todayStr, startTime: '21:00', durationMinutes: 105, channelId: 'c1' },
+            { id: 'sched-8', video: demoVideos[7], date: todayStr, startTime: '23:00', durationMinutes: 60, channelId: 'c1' },
+          ];
+          setScheduledPrograms(demoPrograms);
         }
       } catch (e) {
         console.error('[StreamTV] Erro ao carregar dados:', e);
@@ -667,6 +704,31 @@ function App() {
          isLive: true
        };
     }
+
+    // Phase 5: Auto DJ Logic
+    const autoDjConfig = JSON.parse(localStorage.getItem('autodj-config') || '{"enabled":false}');
+    if (autoDjConfig.enabled && videos.length > 0) {
+      // Logic to pick a "random" video based on the current minute to keep it stable
+      // across refreshes but changing over time. 
+      // For a real Auto DJ, we'd want a more robust state, but this is a good start.
+      const seed = Math.floor(currentTimeTick.getTime() / (1000 * 60 * 5)); // changes every 5 mins
+      const videoIndex = seed % videos.length;
+      const adVideo = videos[videoIndex];
+
+      return {
+        program: {
+          id: 'auto-dj-active',
+          video: adVideo,
+          startTime: '00:00',
+          durationMinutes: 1440,
+          date: todayStr,
+          channelId: selectedChannelId || 'c1'
+        } as ScheduledProgram,
+        offsetSeconds: (currentTimeTick.getTime() / 1000) % 300, // simple loop offset
+        isLive: true
+      };
+    }
+
     return { program: null, offsetSeconds: 0, isLive: false };
   };
 
@@ -783,89 +845,217 @@ function App() {
       <aside className="sidebar">
         <div className="logo-area">
           <span className="tv-icon">📺</span>
-          <span>StreamTV</span>
+          <span>StreamTV <span style={{ color: 'var(--accent-primary)', fontSize: '12px', fontWeight: '400' }}>MCR PRO</span></span>
         </div>
-        <nav>
-          <div className={`nav-item ${activeTab === 'library' ? 'active' : ''}`} onClick={() => setActiveTab('library')}>
-            📚 Biblioteca
-          </div>
-          <div className={`nav-item ${activeTab === 'schedule' ? 'active' : ''}`} onClick={() => setActiveTab('schedule')}>
-            📅 Grade de Horários
-          </div>
-          <div className={`nav-item ${activeTab === 'guide' ? 'active' : ''}`} onClick={() => setActiveTab('guide')}>
-            📖 Guia de Programação
-          </div>
+
+        <div className="nav-item-group" style={{ marginBottom: '20px' }}>
+          <div style={{ padding: '0 16px 8px 16px', fontSize: '10px', fontWeight: 'bold', color: 'var(--text-secondary)', letterSpacing: '1px' }}>CONTROLE MESTRE</div>
           <div className={`nav-item ${activeTab === 'live' ? 'active' : ''}`} onClick={() => setActiveTab('live')}>
             🔴 Modo Transmissão
           </div>
+          <div className={`nav-item ${activeTab === 'mcr' ? 'active' : ''}`} onClick={() => setActiveTab('mcr')}>
+            🎛️ Master Control (MCR)
+          </div>
+        </div>
+
+        <div className="nav-item-group" style={{ marginBottom: '20px' }}>
+          <div style={{ padding: '0 16px 8px 16px', fontSize: '10px', fontWeight: 'bold', color: 'var(--text-secondary)', letterSpacing: '1px' }}>AUTOMAÇÃO</div>
+          <div className={`nav-item ${activeTab === 'autodj' ? 'active' : ''}`} onClick={() => setActiveTab('autodj')}>
+            🎵 Auto DJ / Playout
+          </div>
+          <div className={`nav-item ${activeTab === 'robot' ? 'active' : ''}`} onClick={() => setActiveTab('robot')}>
+            🤖 Robô Locutor
+          </div>
+        </div>
+
+        <div className="nav-item-group" style={{ marginBottom: '20px' }}>
+          <div style={{ padding: '0 16px 8px 16px', fontSize: '10px', fontWeight: 'bold', color: 'var(--text-secondary)', letterSpacing: '1px' }}>CONTEÚDO</div>
+          <div className={`nav-item ${activeTab === 'schedule' ? 'active' : ''}`} onClick={() => setActiveTab('schedule')}>
+            📅 Grade de Horários
+          </div>
+          <div className={`nav-item ${activeTab === 'library' ? 'active' : ''}`} onClick={() => setActiveTab('library')}>
+            📚 Biblioteca de Mídia
+          </div>
+          <div className={`nav-item ${activeTab === 'gospel' ? 'active' : ''}`} onClick={() => setActiveTab('gospel')}>
+            ✝️ Notícias Gospel
+          </div>
           <div className={`nav-item ${activeTab === 'overlay' ? 'active' : ''}`} onClick={() => setActiveTab('overlay')}>
-            🎨 Overlay
+            🖼️ Camadas / Overlays
           </div>
-          <div className={`nav-item ${activeTab === 'mcr' ? 'active' : ''}`} onClick={() => setActiveTab('mcr')} style={{ borderTop: '1px solid #333', marginTop: '10px', paddingTop: '10px' }}>
-            🎛️ MCR PRO
-          </div>
+        </div>
+
+        <div style={{ marginTop: 'auto' }}>
           <div className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => setActiveTab('settings')}>
-            ⚙️ Conexões / Login
+            ⚙️ Configurações
           </div>
-        </nav>
+        </div>
       </aside>
 
       <main className="main-content">
         <ErrorBoundary>
-        {activeTab !== 'live' && activeTab !== 'overlay' && (
-          <header className="header">
+        {activeTab !== 'live' && activeTab !== 'overlay' && activeTab !== 'mcr' && activeTab !== 'autodj' && activeTab !== 'robot' && (
+          <header className="header fade-in">
             <h1>
-              {activeTab === 'schedule' && 'Grade de Programação (Timeline)'}
+              {activeTab === 'schedule' && 'Grade de Programação'}
               {activeTab === 'guide' && 'Guia de Programação (EPG)'}
-              {activeTab === 'library' && 'Sua Biblioteca de VODs e Vídeos'}
-              {activeTab === 'settings' && 'Conexões e Contas'}
+              {activeTab === 'library' && 'Biblioteca de Mídia'}
+              {activeTab === 'gospel' && 'Notícias Gospel'}
+              {activeTab === 'settings' && 'Configurações do Sistema'}
             </h1>
+            <div style={{ display: 'flex', gap: '12px' }}>
+               {/* Global status or actions could go here */}
+               <div style={{ padding: '8px 16px', backgroundColor: isStreaming ? 'var(--accent-danger)' : 'var(--bg-tertiary)', borderRadius: '20px', fontSize: '11px', fontWeight: '900', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: isStreaming ? '#fff' : '#444', animation: isStreaming ? 'pulse 1.5s infinite' : 'none' }} />
+                  {isStreaming ? 'STREAMING ATIVO' : 'SISTEMA OFFLINE'}
+               </div>
+            </div>
           </header>
         )}
 
         {/* ... Library & Settings Tabs unchanged ... */}
         {activeTab === 'library' && (
-          <div className="schedule-container">
-            <p>Seus VODs e vídeos importados.</p>
+          <div className="schedule-container fade-in">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', gap: '20px' }}>
+               <div style={{ flex: 1, position: 'relative' }}>
+                 <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', opacity: 0.4 }}>🔍</span>
+                 <input 
+                   type="text" 
+                   placeholder="Buscar na biblioteca..." 
+                   value={librarySearch}
+                   onChange={e => setLibrarySearch(e.target.value)}
+                   style={{ width: '100%', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', padding: '12px 12px 12px 40px', borderRadius: '8px', color: '#fff', outline: 'none' }}
+                 />
+               </div>
+               <div style={{ display: 'flex', gap: '8px', backgroundColor: 'var(--bg-secondary)', padding: '4px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                 {(['all', 'local', 'youtube', 'twitch'] as const).map(f => (
+                   <button 
+                    key={f}
+                    onClick={() => setLibraryFilter(f)}
+                    style={{ 
+                      padding: '6px 12px', 
+                      borderRadius: '6px', 
+                      border: 'none', 
+                      cursor: 'pointer', 
+                      fontSize: '11px',
+                      textTransform: 'uppercase',
+                      fontWeight: 'bold',
+                      backgroundColor: libraryFilter === f ? 'var(--accent-primary)' : 'transparent',
+                      color: libraryFilter === f ? '#fff' : 'var(--text-secondary)'
+                    }}
+                   >
+                     {f === 'all' ? 'Tudo' : f}
+                   </button>
+                 ))}
+               </div>
+               <button className="btn-primary" onClick={handleConnectLocal} style={{ whiteSpace: 'nowrap' }}>+ Importar Vídeos</button>
+            </div>
+
             {ytError && (
-              <div style={{
-                backgroundColor: 'rgba(220,38,38,0.15)',
-                border: '1px solid rgba(220,38,38,0.5)',
-                borderRadius: '4px',
-                padding: '12px 16px',
-                marginBottom: '20px',
-                color: '#fca5a5',
-                fontSize: '13px',
-                fontFamily: 'monospace'
-              }}>
-                <strong>⚠️ Erro ao carregar vídeos do YouTube:</strong><br />
-                {ytError}
-                {ytError.includes('accessNotConfigured') || ytError.includes('API') ? (
-                  <div style={{ marginTop: '8px', fontFamily: 'sans-serif', color: '#fecaca' }}>
-                    👉 Ative a <strong>YouTube Data API v3</strong> no{' '}
-                    <a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" style={{ color: '#93c5fd' }}>
-                      Google Cloud Console
-                    </a>.
-                  </div>
-                ) : null}
+              <div className="glass-panel" style={{ padding: '15px', marginBottom: '20px', borderLeft: '4px solid var(--accent-danger)' }}>
+                <strong style={{ color: 'var(--accent-danger)' }}>⚠️ Erro no YouTube:</strong> {ytError}
               </div>
             )}
-            {loading ? <p>Carregando...</p> : (
+
+            {loading ? (
+              <div style={{ textAlign: 'center', padding: '100px' }}>
+                <div className="pulse" style={{ fontSize: '40px' }}>⏳</div>
+                <p>Carregando biblioteca...</p>
+              </div>
+            ) : (
               <div className="library-grid">
-                {videos.map(video => (
-                  <div className="video-card" key={video.id}>
-                    <div className="video-thumb" style={{ backgroundImage: `url(${video.thumbnail})` }}>
-                      <span className="video-duration">{video.duration}</span>
+                {videos
+                  .filter(v => {
+                    const matchesSearch = v.title.toLowerCase().includes(librarySearch.toLowerCase());
+                    const matchesFilter = libraryFilter === 'all' || v.platform === libraryFilter;
+                    return matchesSearch && matchesFilter;
+                  })
+                  .map(video => (
+                  <div 
+                    className="video-card glass-panel" 
+                    key={video.id} 
+                    draggable 
+                    onDragStart={(e) => e.dataTransfer.setData('videoId', video.id)}
+                    style={{ cursor: 'grab', transition: '0.2s' }}
+                  >
+                    <div className="video-thumb" style={{ backgroundImage: `url(${video.thumbnail})`, borderRadius: '8px 8px 0 0' }}>
+                      <span className="video-duration" style={{ background: 'rgba(0,0,0,0.8)', padding: '2px 6px', borderRadius: '4px', fontSize: '10px' }}>{video.duration}</span>
+                      <div className={`platform-badge ${video.platform}`} style={{ position: 'absolute', top: '8px', right: '8px', width: '20px', height: '20px', fontSize: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%' }}>
+                        {video.platform === 'youtube' ? 'Y' : video.platform === 'twitch' ? 'T' : 'L'}
+                      </div>
                     </div>
-                    <div className="video-info">
-                      <div className="video-title">{video.title}</div>
-                      <div className="video-meta">{video.platform} • {video.date}</div>
+                    <div className="video-info" style={{ padding: '12px' }}>
+                      <div className="video-title" style={{ fontSize: '13px', fontWeight: 'bold', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{video.title}</div>
+                      <div className="video-meta" style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                        {video.platform} • {video.date}
+                      </div>
                     </div>
                   </div>
                 ))}
               </div>
             )}
           </div>
+        )}
+
+        {/* Gospel News Tab */}
+        {activeTab === 'gospel' && (
+          <GospelNewsComponent 
+            onOpenLiveStream={() => setActiveTab('live')} 
+            onAnnounceNews={async (news: GospelNews) => {
+              // 1. Abaixar volume do rádio
+              setRadioVolume(0);
+              
+              // 2. Atualizar ticker com a notícia
+              const tickerLayerId = overlayConfig.layers.find(l => l.type === 'ticker')?.id;
+              if (tickerLayerId) {
+                const originalTickerText = overlayConfig.layers.find(l => l.id === tickerLayerId)?.text || '';
+                const newsTickerText = `📢 NOTÍCIA GOSPEL: ${news.title} - ${news.description.substring(0, 200)}`;
+                updateLayer(tickerLayerId, { text: newsTickerText });
+                
+                // 3. Falar a notícia via TTS
+                const ttsMessage = `Notícia Gospel: ${news.title}. ${news.description}`;
+                speakTts(ttsMessage);
+                
+                // Usar também o speechSynthesis para preview local
+                const synth = window.speechSynthesis;
+                if (synth) {
+                  synth.cancel();
+                  const utterance = new SpeechSynthesisUtterance(ttsMessage);
+                  utterance.lang = 'pt-BR';
+                  utterance.rate = 0.75;
+                  utterance.pitch = 1.1;
+                  
+                  // 4. Quando terminar de falar, restaurar ticker e volume
+                  utterance.onend = () => {
+                    setTimeout(() => {
+                      updateLayer(tickerLayerId, { text: originalTickerText });
+                      setRadioVolume(1);
+                    }, 2000);
+                  };
+                  
+                  // Fallback: se não falar em 20 segundos, restaura mesmo assim
+                  setTimeout(() => {
+                    updateLayer(tickerLayerId, { text: originalTickerText });
+                    setRadioVolume(1);
+                  }, 20000);
+                  
+                  synth.speak(utterance);
+                } else {
+                  // Sem speechSynthesis, restaura após 15 segundos
+                  setTimeout(() => {
+                    updateLayer(tickerLayerId, { text: originalTickerText });
+                    setRadioVolume(1);
+                  }, 15000);
+                }
+              } else {
+                // Sem ticker, só fala e restaura volume após tempo estimado
+                const ttsMessage = `Notícia Gospel: ${news.title}. ${news.description}`;
+                speakTts(ttsMessage);
+                setTimeout(() => {
+                  setRadioVolume(1);
+                }, 15000);
+              }
+            }}
+          />
         )}
 
         {/* Overlay Editor Tab */}
@@ -1184,491 +1374,367 @@ function App() {
         )}
 
         {activeTab === 'settings' && (
+          <div className="schedule-container fade-in" style={{ maxWidth: '1200px', margin: '0 auto' }}>
+            
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px', marginTop: '20px' }}>
+              
+              {/* Category: Streaming */}
+              <div className="glass-panel" style={{ padding: '25px' }}>
+                <h2 style={{ fontSize: '18px', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span>🚀</span> Transmissão (Streaming)
+                </h2>
+                <div className="editor-form">
+                  <label>RTMP URL (Servidor):</label>
+                  <input type="text" value={rtmpUrl} onChange={(e) => { setRtmpUrl(e.target.value); localStorage.setItem('rtmpUrl', e.target.value); }} placeholder="rtmp://a.rtmp.youtube.com/live2" />
+                  
+                  <label>Chave de Transmissão (Stream Key):</label>
+                  <div style={{ display: 'flex', gap: '10px' }}>
+                    <input type={showStreamKey ? "text" : "password"} value={streamKey} onChange={(e) => { setStreamKey(e.target.value); localStorage.setItem('streamKey', e.target.value); }} style={{ flex: 1 }} />
+                    <button onClick={() => setShowStreamKey(!showStreamKey)} className="btn-connect" style={{ height: '42px' }}>{showStreamKey ? 'Ocultar' : 'Mostrar'}</button>
+                  </div>
 
-
-          <div className="schedule-container">
-            <h2>Configuração de APIs</h2>
-            <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>Insira seus Client IDs para habilitar a integração com Twitch e YouTube. Eles são usados apenas localmente.</p>
-            <div className="connections-area" style={{ marginBottom: '30px' }}>
-              <div className="connection-card" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '10px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <div className="platform-icon twitch">Tw</div>
-                  <h3 style={{ margin: 0 }}>Twitch Client ID</h3>
-                </div>
-                <input 
-                  type="text" 
-                  value={twitchClientId}
-                  onChange={(e) => { setTwitchClientId(e.target.value); setKeysSaved(false); }}
-                  placeholder="Cole seu Client ID da Twitch aqui"
-                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'white', border: '1px solid var(--border-color)', padding: '10px', borderRadius: '2px', outline: 'none', width: '100%', fontFamily: 'monospace', fontSize: '13px' }}
-                />
-              </div>
-              <div className="connection-card" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '10px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <div className="platform-icon youtube">Yt</div>
-                  <h3 style={{ margin: 0 }}>YouTube Client ID</h3>
-                </div>
-                <input 
-                  type="text" 
-                  value={youtubeClientId}
-                  onChange={(e) => { setYoutubeClientId(e.target.value); setKeysSaved(false); }}
-                  placeholder="Cole seu Client ID do Google aqui"
-                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'white', border: '1px solid var(--border-color)', padding: '10px', borderRadius: '2px', outline: 'none', width: '100%', fontFamily: 'monospace', fontSize: '13px' }}
-                />
-                <input 
-                  type="password" 
-                  value={youtubeClientSecret}
-                  onChange={(e) => { setYoutubeClientSecret(e.target.value); setKeysSaved(false); }}
-                  placeholder="Cole seu Client Secret do Google aqui"
-                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'white', border: '1px solid var(--border-color)', padding: '10px', borderRadius: '2px', outline: 'none', width: '100%', fontFamily: 'monospace', fontSize: '13px' }}
-                />
-                <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Encontrado no Google Cloud Console → Credenciais → sua credencial OAuth → "Client Secret"</div>
-              </div>
-              <button 
-                className="btn-connect" 
-                onClick={async () => {
-                  try {
-                    // @ts-ignore
-                    const ipcRenderer = window.require ? window.require('electron').ipcRenderer : null;
-                    if (ipcRenderer) {
-                      await ipcRenderer.invoke('save-client-ids', { twitchId: twitchClientId, youtubeId: youtubeClientId, youtubeSecret: youtubeClientSecret });
-                      setKeysSaved(true);
-                      setTimeout(() => setKeysSaved(false), 3000);
-                    }
-                  } catch(e) { alert('Erro ao salvar: ' + e); }
-                }}
-                style={{ backgroundColor: keysSaved ? '#4ade80' : 'var(--accent-color)', alignSelf: 'flex-start', transition: '0.3s' }}
-              >
-                {keysSaved ? '✓ Salvo!' : 'Salvar Chaves'}
-              </button>
-            </div>
-
-            <h2>Configuração RTMP (Streaming)</h2>
-            <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>Configure a URL de saída para transmitir o conteúdo da sua grade ao vivo via RTMP.</p>
-            <div className="connections-area" style={{ marginBottom: '30px' }}>
-              <div className="connection-card" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '10px' }}>
-                <label style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>Servidor RTMP:</label>
-                <select 
-                  value={rtmpUrl}
-                  onChange={(e) => setRtmpUrl(e.target.value)}
-                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'white', border: '1px solid var(--border-color)', padding: '10px', borderRadius: '2px', outline: 'none' }}
-                >
-                  <option value="rtmp://live.twitch.tv/app">Twitch (Padrão Global)</option>
-                  <option value="rtmp://gru02.contribute.live-video.net/app">Twitch (São Paulo - GRU)</option>
-                  <option value="rtmp://gig01.contribute.live-video.net/app">Twitch (Rio de Janeiro - GIG)</option>
-                  <option value="rtmp://a.rtmp.youtube.com/live2">YouTube Live</option>
-                  <option value="rtmp://live-api-s.facebook.com:443/rtmp/">Facebook Live</option>
-                  <option value="custom">Customizado...</option>
-                </select>
-                {rtmpUrl === 'custom' && (
-                  <input 
-                    type="text"
-                    placeholder="rtmp://seu-servidor.com/live"
-                    onChange={(e) => setRtmpUrl(e.target.value)}
-                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'white', border: '1px solid var(--border-color)', padding: '10px', borderRadius: '2px', outline: 'none', fontFamily: 'monospace', fontSize: '13px' }}
-                  />
-                )}
-              </div>
-              <div className="connection-card" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '10px' }}>
-                <label style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>Stream Key (Chave de Transmissão):</label>
-                <input 
-                  type="password" 
-                  value={streamKey}
-                  onChange={(e) => { 
-                    let val = e.target.value.trim();
-                    // Auto-reparo: se o usuário colou a URL inteira no campo da chave
-                    if (val.includes('/')) {
-                      const parts = val.split('/');
-                      val = parts[parts.length - 1];
-                    }
-                    setStreamKey(val); 
-                    localStorage.setItem('streamKey', val); 
-                  }}
-                  placeholder="Cole sua nova chave de transmissão da Twitch aqui"
-                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'white', border: '1px solid var(--border-color)', padding: '10px', borderRadius: '2px', outline: 'none', fontFamily: 'monospace', fontSize: '13px' }}
-                />
-                <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Dica: Selecione o servidor "São Paulo" acima para maior estabilidade no Brasil.</div>
-              </div>
-              <div className="connection-card" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '10px' }}>
-                <label style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>Aceleração de Hardware (Reduz uso de CPU):</label>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <label className="switch">
-                    <input type="checkbox" checked={hwAccel} onChange={(e) => {
-                      setHwAccel(e.target.checked);
-                      localStorage.setItem('hwAccel', e.target.checked.toString());
-                    }} />
-                    <span className="slider"></span>
-                  </label>
-                  <span style={{ fontSize: '13px', color: hwAccel ? '#4ade80' : '#888' }}>
-                    {hwAccel ? 'NVIDIA NVENC Ativado (Requer Placa de Vídeo)' : 'Desativado (Usa Processador/CPU)'}
-                  </span>
+                  <div style={{ marginTop: '15px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={hwAccel} onChange={(e) => setHwAccel(e.target.checked)} />
+                      <span>Habilitar Aceleração de Hardware (GPU)</span>
+                    </label>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            <h2 style={{ marginTop: '30px' }}>Retransmissão de Canal (Restreaming)</h2>
-            <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>Quando ativado, o sistema irá ignorar a grade e retransmitir a live configurada abaixo.</p>
-            <div className="connections-area" style={{ marginBottom: '30px' }}>
-              <div className="connection-card" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '10px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <label className="switch">
-                    <input type="checkbox" checked={restreamEnabled} onChange={(e) => {
-                      setRestreamEnabled(e.target.checked);
-                      localStorage.setItem('restreamEnabled', e.target.checked.toString());
-                    }} />
-                    <span className="slider"></span>
-                  </label>
-                  <span style={{ fontSize: '13px', color: restreamEnabled ? '#4ade80' : '#888', fontWeight: 'bold' }}>
-                    {restreamEnabled ? 'Retransmissão ATIVADA (Substitui a programação)' : 'Retransmissão Desativada'}
-                  </span>
-                </div>
+              {/* Category: Fallback & Restream */}
+              <div className="glass-panel" style={{ padding: '25px' }}>
+                <h2 style={{ fontSize: '18px', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span>🔄</span> Fallback & Retransmissão
+                </h2>
                 
-                {restreamEnabled && (
-                  <>
-                    <label style={{ color: 'var(--text-secondary)', fontSize: '13px', marginTop: '10px' }}>URL do Canal / Live / M3U8:</label>
-                    <input 
-                      type="text" 
-                      value={restreamUrl}
-                      onChange={(e) => { setRestreamUrl(e.target.value); localStorage.setItem('restreamUrl', e.target.value); }}
-                      placeholder="Ex: https://youtube.com/watch?v=... ou http://.../stream.m3u8"
-                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'white', border: '1px solid var(--border-color)', padding: '10px', borderRadius: '2px', outline: 'none', fontSize: '13px', fontFamily: 'monospace' }}
-                    />
-                  </>
-                )}
-              </div>
-            </div>
-
-            <h2 style={{ marginTop: '30px' }}>Stream de Espera (Fallback da Grade)</h2>
-            <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>Quando não houver nenhum evento agendado ou ao vivo, o StreamTV executará esta Rádio Web automaticamente ao invés do descanso de tela "IDLE".</p>
-            <div className="connections-area" style={{ marginBottom: '30px' }}>
-              <div className="connection-card" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '10px' }}>
-                <label style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>URL do Stream da Rádio (mp3/aac):</label>
-                <input 
-                  type="text" 
-                  value={fallbackRadioUrl}
-                  onChange={(e) => { setFallbackRadioUrl(e.target.value); localStorage.setItem('fallbackRadioUrl', e.target.value); }}
-                  placeholder="Ex: http://stream.radio.com:8000/live.mp3"
-                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'white', border: '1px solid var(--border-color)', padding: '10px', borderRadius: '2px', outline: 'none', fontSize: '13px' }}
-                />
-                
-                <label style={{ color: 'var(--text-secondary)', fontSize: '13px', marginTop: '10px' }}>Banner de Fundo (PNG/JPG):</label>
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <input 
-                    type="text" 
-                    value={fallbackBannerUrl}
-                    onChange={(e) => { setFallbackBannerUrl(e.target.value); localStorage.setItem('fallbackBannerUrl', e.target.value); }}
-                    placeholder="URL da imagem ou caminho no PC"
-                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'white', border: '1px solid var(--border-color)', padding: '10px', borderRadius: '2px', outline: 'none', fontSize: '13px', flex: 1 }}
-                  />
-                  <button
-                    className="btn-primary"
-                    style={{ padding: '0 15px', borderRadius: '2px', cursor: 'pointer', border: 'none', color: 'white' }}
-                    onClick={async () => {
-                      try {
-                        // @ts-ignore
-                        const ipcRenderer = window.require ? window.require('electron').ipcRenderer : null;
-                        if (ipcRenderer) {
-                          const filePath = await ipcRenderer.invoke('select-image-file');
-                          if (filePath) {
-                            setFallbackBannerUrl(filePath);
-                            localStorage.setItem('fallbackBannerUrl', filePath);
-                          }
-                        } else {
-                          alert('Abra o aplicativo via Electron para selecionar arquivos locais.');
-                        }
-                      } catch (e) { alert('Erro ao selecionar imagem: ' + e); }
-                    }}
-                  >Procurar...</button>
+                <div style={{ marginBottom: '25px', paddingBottom: '20px', borderBottom: '1px solid var(--border-color)' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 'bold', fontSize: '14px' }}>Modo Retransmissão</div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Ignora a grade e transmite uma live externa.</div>
+                    </div>
+                    <input type="checkbox" checked={restreamEnabled} onChange={(e) => { setRestreamEnabled(e.target.checked); localStorage.setItem('restreamEnabled', e.target.checked.toString()); }} />
+                  </label>
+                  {restreamEnabled && (
+                    <input type="text" value={restreamUrl} onChange={(e) => { setRestreamUrl(e.target.value); localStorage.setItem('restreamUrl', e.target.value); }} placeholder="URL do YouTube/Twitch/M3U8" style={{ width: '100%', marginTop: '10px', backgroundColor: '#000', border: '1px solid #333', padding: '10px', borderRadius: '8px', color: '#fff' }} />
+                  )}
                 </div>
-              </div>
-            </div>
 
-            <h2>Vincule suas contas</h2>
-            <div className="connections-area">
-              <div className="connection-card">
-                <div className="connection-info">
-                  <div className="platform-icon twitch">Tw</div>
-                  <div>
-                    <h3 style={{ margin: '0 0 5px 0' }}>Twitch</h3>
-                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{connections.twitch ? 'Conectado' : !twitchClientId ? 'Client ID não configurado' : 'Não conectado'}</div>
+                <div>
+                  <div style={{ fontWeight: 'bold', fontSize: '14px', marginBottom: '10px' }}>Rádio de Fallback (Esperas)</div>
+                  <label style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>URL da Rádio (MP3/AAC):</label>
+                  <input type="text" value={fallbackRadioUrl} onChange={(e) => { setFallbackRadioUrl(e.target.value); localStorage.setItem('fallbackRadioUrl', e.target.value); }} style={{ width: '100%', marginTop: '5px', marginBottom: '10px', backgroundColor: '#000', border: '1px solid #333', padding: '10px', borderRadius: '8px', color: '#fff' }} />
+                  <label style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Banner de Fundo:</label>
+                  <div style={{ display: 'flex', gap: '8px', marginTop: '5px' }}>
+                    <input type="text" value={fallbackBannerUrl} onChange={(e) => setFallbackBannerUrl(e.target.value)} style={{ flex: 1, backgroundColor: '#000', border: '1px solid #333', padding: '10px', borderRadius: '8px', color: '#fff' }} />
+                    <button className="btn-connect" onClick={async () => {
+                       // @ts-ignore
+                       const ipcRenderer = window.require ? window.require('electron').ipcRenderer : null;
+                       if (!ipcRenderer) return alert('Disponível apenas no Electron.');
+                       const path = await ipcRenderer.invoke('select-image-file');
+                       if (path) setFallbackBannerUrl(path);
+                    }}>📁</button>
                   </div>
                 </div>
-                <button className="btn-connect" onClick={() => handleConnect('twitch')} style={{ backgroundColor: connections.twitch ? '#4ade80' : !twitchClientId ? '#333' : '', opacity: !twitchClientId && !connections.twitch ? 0.5 : 1 }} disabled={!twitchClientId && !connections.twitch}>
-                  {connections.twitch ? 'Desconectar' : 'Conectar'}
-                </button>
-              </div>
-              <div className="connection-card">
-                <div className="connection-info">
-                  <div className="platform-icon youtube">Yt</div>
-                  <div>
-                    <h3 style={{ margin: '0 0 5px 0' }}>YouTube</h3>
-                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{connections.youtube ? 'Conectado' : !youtubeClientId ? 'Client ID não configurado' : 'Não conectado'}</div>
-                  </div>
-                </div>
-                <button className="btn-connect" onClick={() => handleConnect('youtube')} style={{ backgroundColor: connections.youtube ? '#4ade80' : !youtubeClientId ? '#333' : '', opacity: !youtubeClientId && !connections.youtube ? 0.5 : 1 }} disabled={!youtubeClientId && !connections.youtube}>
-                  {connections.youtube ? 'Desconectar' : 'Conectar'}
-                </button>
               </div>
 
-              <div className="connection-card">
-                <div className="connection-info">
-                  <div className="platform-icon" style={{ backgroundColor: '#2a2a35' }}>📁</div>
-                  <div>
-                    <h3 style={{ margin: '0 0 5px 0' }}>Pasta Local</h3>
-                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{connections.local ? 'Importado' : 'Sem vídeos'}</div>
+              {/* Category: APIs & Accounts */}
+              <div className="glass-panel" style={{ padding: '25px', gridColumn: 'span 2' }}>
+                <h2 style={{ fontSize: '18px', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span>🔌</span> Conexões e APIs
+                </h2>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
+                  <div className="connection-card" style={{ background: 'rgba(100, 65, 164, 0.1)', borderColor: 'rgba(100, 65, 164, 0.2)' }}>
+                    <div className="connection-info">
+                      <div className="platform-icon twitch">Tw</div>
+                      <div>
+                        <div style={{ fontWeight: 'bold' }}>Twitch</div>
+                        <div style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>{connections.twitch ? 'CONECTADO' : 'NÃO VINCULADO'}</div>
+                      </div>
+                    </div>
+                    <button className="btn-connect" onClick={() => handleConnect('twitch')} style={{ background: connections.twitch ? '#4ade80' : '' }}>{connections.twitch ? 'Sair' : 'Conectar'}</button>
+                  </div>
+
+                  <div className="connection-card" style={{ background: 'rgba(255, 0, 0, 0.05)', borderColor: 'rgba(255, 0, 0, 0.1)' }}>
+                    <div className="connection-info">
+                      <div className="platform-icon youtube">Yt</div>
+                      <div>
+                        <div style={{ fontWeight: 'bold' }}>YouTube</div>
+                        <div style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>{connections.youtube ? 'CONECTADO' : 'NÃO VINCULADO'}</div>
+                      </div>
+                    </div>
+                    <button className="btn-connect" onClick={() => handleConnect('youtube')} style={{ background: connections.youtube ? '#4ade80' : '' }}>{connections.youtube ? 'Sair' : 'Conectar'}</button>
+                  </div>
+
+                  <div className="connection-card">
+                    <div className="connection-info">
+                      <div className="platform-icon" style={{ backgroundColor: '#2a2a35' }}>📁</div>
+                      <div>
+                        <div style={{ fontWeight: 'bold' }}>Pasta Local</div>
+                        <div style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>{connections.local ? 'IMPORTADO' : 'VAZIO'}</div>
+                      </div>
+                    </div>
+                    <button className="btn-connect" onClick={handleConnectLocal} style={{ background: connections.local ? '#4ade80' : '' }}>{connections.local ? 'Trocar' : 'Selecionar'}</button>
                   </div>
                 </div>
-                <button className="btn-connect" onClick={handleConnectLocal} style={{ backgroundColor: connections.local ? '#4ade80' : '' }}>
-                  {connections.local ? 'Remover Vídeos' : 'Selecionar Pasta'}
-                </button>
               </div>
+
             </div>
           </div>
         )}
 
+        {activeTab === 'autodj' && (
+          <AutoDJ 
+            videos={videos.filter(v => v.platform === 'local')} 
+            currentVideo={liveProgram?.id === 'auto-dj-active' ? liveProgram.video : undefined}
+            onPlayNext={(v) => {
+              console.log("Auto DJ playing next:", v.title);
+            }}
+          />
+        )}
+
+        {activeTab === 'robot' && (
+          <div className="fade-in" style={{ flex: 1, overflow: 'hidden' }}>
+            <VirtualAnnouncer 
+              currentTrack={liveProgram?.video?.title}
+              nextTrack={nextProgram?.video?.title}
+            />
+          </div>
+        )}
+
+
         {activeTab === 'schedule' && (
-          <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-            <div className="schedule-container" style={{ flex: 1, padding: '30px', overflowY: 'auto' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                <p style={{ margin: 0 }}>Monte a grade selecionando os vídeos no painel lateral.</p>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>Exibindo grade de:</span>
-                  <input 
-                    type="date" 
-                    value={viewDate} 
-                    onChange={(e) => setViewDate(e.target.value)}
-                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'white', border: '1px solid var(--border-color)', padding: '5px 10px', borderRadius: '4px', outline: 'none', fontSize: '14px' }}
-                  />
+          <div className="fade-in" style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+            
+            {/* Left: Timeline View */}
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', backgroundColor: 'var(--bg-primary)', overflow: 'hidden' }}>
+              <div style={{ padding: '20px 30px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                     <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>DATA:</span>
+                     <input type="date" value={viewDate} onChange={e => setViewDate(e.target.value)} style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', color: '#fff', padding: '6px 12px', borderRadius: '6px', fontSize: '13px' }} />
+                   </div>
+                   <button onClick={() => setViewDate(currentTimeTick.toISOString().split('T')[0])} style={{ background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--accent-primary)', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>Hoje</button>
+                </div>
+                <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                  {scheduledPrograms.filter(p => p.date === viewDate).length} eventos agendados
                 </div>
               </div>
-              
-              <div className="timeline" ref={timelineRef}>
-                <div style={{ display: 'flex' }}>
-                  <div style={{ width: '150px', flexShrink: 0, backgroundColor: 'var(--bg-secondary)', borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)' }}></div>
-                  <div className="time-header" style={{ flex: 1, borderBottom: '1px solid var(--border-color)', display: 'flex', position: 'relative' }}>
-                    {times.map(time => (
-                      <div key={time} className="time-slot" style={{ minWidth: '100px', flexShrink: 0, padding: '10px 0', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '12px', borderRight: '1px solid rgba(255,255,255,0.05)' }}>{time}</div>
-                    ))}
-                    
-                    {/* Marcador de Hora Atual (Linha Vermelha) */}
-                    {viewDate === currentTimeTick.toISOString().split('T')[0] && (
-                      <div style={{ 
-                        position: 'absolute', 
-                        top: 0, 
-                        bottom: 0, 
-                        left: `${timeMarkerLeft}px`, 
-                        width: '2px', 
-                        backgroundColor: '#ef4444', 
-                        zIndex: 100,
-                        boxShadow: '0 0 8px rgba(239, 68, 68, 0.6)',
-                        pointerEvents: 'none'
-                      }}>
-                        <div style={{ position: 'sticky', top: 0, backgroundColor: '#ef4444', color: 'white', fontSize: '10px', padding: '2px 4px', borderRadius: '0 0 4px 4px', fontWeight: 'bold' }}>
-                          {currentTimeTick.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                        </div>
+
+              <div 
+                className="timeline-container" 
+                style={{ flex: 1, overflow: 'auto', position: 'relative', backgroundColor: '#08080a' }}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  const videoId = e.dataTransfer.getData('videoId');
+                  if (videoId) {
+                    setSelectedVideoId(videoId);
+                  }
+                }}
+              >
+                {/* Time Ruler */}
+                <div style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 10, backgroundColor: 'var(--bg-primary)', borderBottom: '1px solid var(--border-color)' }}>
+                  <div style={{ width: '180px', flexShrink: 0, borderRight: '1px solid var(--border-color)' }}></div>
+                  <div style={{ display: 'flex', flex: 1 }}>
+                    {Array.from({ length: 24 }).map((_, h) => (
+                      <div key={h} style={{ width: '200px', flexShrink: 0, borderRight: '1px solid rgba(255,255,255,0.05)', padding: '10px', fontSize: '10px', color: 'var(--text-secondary)', fontWeight: 'bold' }}>
+                        {String(h).padStart(2, '0')}:00
                       </div>
-                    )}
+                    ))}
                   </div>
                 </div>
-                
+
+                {/* Grid Rows */}
                 {channels.map(channel => (
-                  <div key={channel.id} style={{ display: 'flex', borderBottom: '1px solid var(--border-color)' }}>
-                    <div style={{ 
-                      width: '150px', 
-                      flexShrink: 0, 
-                      backgroundColor: 'var(--bg-secondary)', 
-                      borderRight: '1px solid var(--border-color)', 
-                      padding: '20px 10px', 
-                      display: 'flex',
-                      alignItems: 'center',
-                      fontWeight: 'bold',
-                      color: 'white',
-                      position: 'sticky',
-                      left: 0,
-                      zIndex: 5
-                    }}>
+                  <div key={channel.id} style={{ display: 'flex', borderBottom: '1px solid rgba(255,255,255,0.03)', minHeight: '120px' }}>
+                    <div style={{ width: '180px', flexShrink: 0, padding: '20px', borderRight: '1px solid var(--border-color)', backgroundColor: 'var(--bg-secondary)', position: 'sticky', left: 0, zIndex: 5, display: 'flex', alignItems: 'center', fontWeight: 'bold', fontSize: '14px' }}>
                       {channel.name}
                     </div>
-                    <div className="channels-area" style={{ position: 'relative', height: '100px', flex: 1 }}>
-                        {/* Marcador de Hora Atual estendido para os canais */}
-                        {viewDate === currentTimeTick.toISOString().split('T')[0] && (
-                          <div style={{ 
-                            position: 'absolute', 
-                            top: 0, 
-                            bottom: 0, 
-                            left: `${timeMarkerLeft}px`, 
-                            width: '1px', 
-                            backgroundColor: 'rgba(239, 68, 68, 0.3)', 
-                            zIndex: 90,
-                            pointerEvents: 'none'
-                          }} />
-                        )}
-                        
-                        {scheduledPrograms.filter(p => p.channelId === channel.id && p.date === viewDate).length === 0 && <p style={{ padding: '20px', color: 'var(--text-secondary)' }}>Nenhum vídeo para este dia.</p>}
-                        {scheduledPrograms.filter(p => p.channelId === channel.id && p.date === viewDate).map(program => {
-                          const isNow = liveProgram?.id === program.id;
-                          return (
-                            <div 
-                              key={program.id} 
-                              className={`program-block ${isNow ? 'program-on-air' : ''}`}
-                              style={{ 
-                                ...getBlockStyle(program), 
-                                backgroundColor: isNow ? 'rgba(239, 68, 68, 0.2)' : undefined,
-                                border: isNow ? '1px solid #ef4444' : undefined,
-                                boxShadow: isNow ? '0 0 10px rgba(239, 68, 68, 0.3)' : undefined,
-                                zIndex: isNow ? 10 : 1
-                              }}
-                            >
-                              <button
-                                onClick={(e) => { e.stopPropagation(); handleDeleteProgram(program.id); }}
-                                title="Remover da grade"
-                                style={{ position: 'absolute', top: '3px', right: '3px', background: 'rgba(220,38,38,0.85)', color: 'white', border: 'none', borderRadius: '2px', cursor: 'pointer', fontSize: '10px', padding: '1px 5px', lineHeight: '1.4', zIndex: 10 }}
-                              >✕</button>
-                              
-                              {isNow && (
-                                <div style={{ position: 'absolute', top: '-12px', left: '50%', transform: 'translateX(-50%)', backgroundColor: '#ef4444', color: 'white', fontSize: '9px', fontWeight: 'bold', padding: '2px 6px', borderRadius: '10px', whiteSpace: 'nowrap', zIndex: 20, boxShadow: '0 2px 4px rgba(0,0,0,0.3)' }}>
-                                  ● AO VIVO
-                                </div>
-                              )}
-                              
-                              <div className="program-title" style={{ fontWeight: isNow ? 'bold' : 'normal', fontSize: '12px' }}>{program.video.title}</div>
-                              <div className="program-time" style={{ fontSize: '10px', opacity: 0.8 }}>{program.startTime} - {formatTime( (program.startTime.split(':').map(Number)[0] * 3600 + program.startTime.split(':').map(Number)[1] * 60 + program.durationMinutes * 60) ).substring(0, 5)}</div>
+                    <div style={{ flex: 1, display: 'flex', position: 'relative' }}>
+                      {/* Vertical Hour Markers */}
+                      {Array.from({ length: 24 }).map((_, h) => (
+                        <div key={h} style={{ width: '200px', flexShrink: 0, borderRight: '1px solid rgba(255,255,255,0.02)' }}></div>
+                      ))}
+
+                      {/* Current Time Indicator */}
+                      {viewDate === currentTimeTick.toISOString().split('T')[0] && (
+                        <div style={{ position: 'absolute', top: 0, bottom: 0, left: `${timeMarkerLeft}px`, width: '2px', backgroundColor: 'var(--accent-danger)', zIndex: 50, boxShadow: '0 0 10px rgba(239,68,68,0.5)' }}>
+                          <div style={{ width: '10px', height: '10px', backgroundColor: 'var(--accent-danger)', borderRadius: '50%', position: 'absolute', top: -4, left: -4 }}></div>
+                        </div>
+                      )}
+
+                      {/* Programs */}
+                      {scheduledPrograms.filter(p => p.channelId === channel.id && p.date === viewDate).map(program => {
+                        const isNow = liveProgram?.id === program.id;
+                        return (
+                          <div 
+                            key={program.id} 
+                            className={`program-block ${isNow ? 'on-air' : ''}`}
+                            style={{ 
+                              ...getBlockStyle(program), 
+                              backgroundColor: isNow ? 'rgba(239, 68, 68, 0.15)' : 'rgba(100, 108, 255, 0.05)',
+                              border: isNow ? '1px solid var(--accent-danger)' : '1px solid rgba(100, 108, 255, 0.2)',
+                              borderRadius: '8px',
+                              padding: '12px',
+                              boxSizing: 'border-box',
+                              overflow: 'hidden',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              justifyContent: 'space-between'
+                            }}
+                          >
+                            <div>
+                              <div style={{ fontSize: '11px', fontWeight: 'bold', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{program.video.title}</div>
+                              <div style={{ fontSize: '9px', color: 'var(--text-secondary)', marginTop: '4px' }}>{program.startTime} - {program.durationMinutes}min</div>
                             </div>
-                          );
-                        })}
+                            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                               <button 
+                                 onClick={(e) => { e.stopPropagation(); handleDeleteProgram(program.id); }}
+                                 style={{ background: 'rgba(255,255,255,0.05)', border: 'none', color: '#888', cursor: 'pointer', padding: '4px', borderRadius: '4px', fontSize: '10px' }}
+                               >🗑️</button>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 ))}
               </div>
             </div>
 
-            <div style={{ width: '320px', backgroundColor: 'var(--bg-secondary)', borderLeft: '1px solid var(--border-color)', padding: '30px', overflowY: 'auto', flexShrink: 0 }}>
-              <h3 style={{ marginTop: 0, borderBottom: '1px solid var(--border-color)', paddingBottom: '10px' }}>Criar Novo Programa</h3>
-              <div className="editor-form" style={{ marginBottom: '30px' }}>
-                <input 
-                  type="text" 
-                  value={newChannelName}
-                  onChange={(e) => setNewChannelName(e.target.value)}
-                  placeholder="Nome do Programa (ex: Reacts)"
-                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'white', border: '1px solid var(--border-color)', padding: '8px', borderRadius: '2px', outline: 'none', width: '100%' }}
-                />
-                <button className="btn-connect" style={{ marginTop: '10px', backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }} onClick={handleAddChannel}>
-                  + Criar Fileira
-                </button>
-              </div>
+            {/* Right: Controls Panel */}
+            <div style={{ width: '380px', backgroundColor: 'var(--bg-secondary)', borderLeft: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              
+              <div style={{ padding: '24px', borderBottom: '1px solid var(--border-color)' }}>
+                 <h3 style={{ fontSize: '16px', fontWeight: 'bold', marginBottom: '20px' }}>AGENDAR EVENTO</h3>
+                 
+                 <div className="editor-form">
+                    <label>Tipo de Evento:</label>
+                    <select 
+                      value={selectedVideoId} 
+                      onChange={e => setSelectedVideoId(e.target.value)}
+                      style={{ marginBottom: '15px' }}
+                    >
+                      <option value="">-- Selecione um Vídeo --</option>
+                      {videos.map(v => <option key={v.id} value={v.id}>{v.title}</option>)}
+                      <optgroup label="Entradas Especiais">
+                        <option value="__camera__">📸 Câmera ao Vivo</option>
+                        <option value="__webradio__">📻 Rádio / Fallback</option>
+                      </optgroup>
+                    </select>
 
-              <h3 style={{ marginTop: 0, borderBottom: '1px solid var(--border-color)', paddingBottom: '10px' }}>Adicionar à Grade</h3>
-              <div className="editor-form">
-                <label>Fileira / Programa:</label>
-                <select value={selectedChannelId} onChange={(e) => setSelectedChannelId(e.target.value)}>
-                  {channels.map(c => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                </select>
+                    <div style={{ marginBottom: '15px', padding: '12px', backgroundColor: 'var(--bg-tertiary)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                      <label style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>🎬 YouTube URL:</label>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <input 
+                          type="text" 
+                          placeholder="https://youtube.com/watch?v=..." 
+                          value={youtubeUrlInput}
+                          onChange={e => setYoutubeUrlInput(e.target.value)}
+                          style={{ flex: 1, backgroundColor: '#000', border: '1px solid #333', padding: '8px 10px', borderRadius: '6px', color: '#fff', fontSize: '12px' }}
+                        />
+                        <button 
+                          onClick={() => {
+                            if (!youtubeUrlInput.trim()) return alert('Cole uma URL do YouTube!');
+                            const ytId = youtubeUrlInput.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]+)/)?.[1];
+                            if (!ytId) return alert('URL do YouTube inválida!');
+                            const exists = videos.find(v => v.id === ytId);
+                            if (!exists) {
+                              const newVideo: VideoItem = {
+                                id: ytId,
+                                title: `YouTube: ${ytId}`,
+                                duration: '00:05:00',
+                                thumbnail: `https://img.youtube.com/vi/${ytId}/mqdefault.jpg`,
+                                platform: 'youtube',
+                                date: new Date().toLocaleDateString()
+                              };
+                              setVideos(prev => [newVideo, ...prev]);
+                            }
+                            setSelectedVideoId(ytId);
+                            setYoutubeUrlInput('');
+                          }}
+                          className="btn-primary" 
+                          style={{ padding: '0 12px', fontSize: '12px', whiteSpace: 'nowrap' }}
+                        >
+                          + Adicionar
+                        </button>
+                      </div>
+                    </div>
 
-                <label style={{ marginTop: '15px' }}>Escolha a Fonte:</label>
-                <select value={selectedVideoId} onChange={(e) => setSelectedVideoId(e.target.value)}>
-                  <option value="">-- VODs --</option>
-                  {videos.map(v => (
-                    <option key={v.id} value={v.id}>{v.title} ({v.duration})</option>
-                  ))}
-                  <option value="" disabled>──────────</option>
-                  <option value="__camera__">📸 Câmera ao Vivo (Notebook/Externa)</option>
-                  <option value="__webradio__">📻 Rádio Web</option>
-                </select>
+                    <div style={{ marginBottom: '15px', padding: '12px', backgroundColor: 'var(--bg-tertiary)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                      <label style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>💾 Arquivo do Computador:</label>
+                      <input
+                        type="file"
+                        accept="video/*,.mp4,.mkv,.avi,.webm,.mov"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          const url = URL.createObjectURL(file);
+                          const durationSeconds = await getLocalVideoDuration(url);
+                          const newVideo: VideoItem = {
+                            id: url,
+                            title: file.name.replace(/\.[^/.]+$/, ''),
+                            duration: formatTime(Math.round(durationSeconds)),
+                            thumbnail: 'https://images.unsplash.com/photo-1611162617474-5b21e879e113?auto=format&fit=crop&w=400&q=80',
+                            platform: 'local',
+                            date: new Date().toLocaleDateString()
+                          };
+                          setVideos(prev => [newVideo, ...prev]);
+                          setSelectedVideoId(newVideo.id);
+                          setConnections(prev => ({ ...prev, local: true }));
+                          if (e.target) e.target.value = '';
+                        }}
+                        style={{ width: '100%', backgroundColor: '#000', border: '1px solid #333', padding: '8px', borderRadius: '6px', color: '#fff', fontSize: '12px' }}
+                      />
+                    </div>
 
-                {(selectedVideoId === '__camera__' || selectedVideoId === '__webradio__') && (
-                  <>
-                    <label style={{ marginTop: '10px' }}>Duração Estimada (minutos):</label>
-                    <input 
-                      type="number" 
-                      value={customDuration} 
-                      onChange={(e) => setCustomDuration(e.target.value)}
-                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'white', border: '1px solid var(--border-color)', padding: '8px', borderRadius: '2px', outline: 'none', width: '100px' }}
-                    />
-                  </>
-                )}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '15px' }}>
+                      <div>
+                        <label>Início:</label>
+                        <input type="time" value={selectedTime} onChange={e => setSelectedTime(e.target.value)} />
+                      </div>
+                      <div>
+                        <label>Data:</label>
+                        <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} />
+                      </div>
+                    </div>
 
-                {selectedVideoId === '__webradio__' && (
-                  <>
-                    <label style={{ marginTop: '10px' }}>URL do Stream da Rádio (mp3/aac):</label>
+                    <label>Fileira / Canal:</label>
+                    <select value={selectedChannelId} onChange={e => setSelectedChannelId(e.target.value)} style={{ marginBottom: '20px' }}>
+                      {channels.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+
+                    <button className="btn-primary" onClick={handleAddProgram} style={{ width: '100%', height: '50px', fontSize: '14px', fontWeight: 'bold' }}>
+                      ADICIONAR À GRADE
+                    </button>
+                 </div>
+               </div>
+
+               <div style={{ padding: '24px', flex: 1, overflowY: 'auto' }}>
+                 <h4 style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '16px', fontWeight: 'bold', letterSpacing: '1px' }}>GERENCIAR FILEIRAS</h4>
+                 <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
                     <input 
                       type="text" 
-                      value={radioUrl} 
-                      onChange={(e) => setRadioUrl(e.target.value)}
-                      placeholder="Ex: http://stream.radio.com:8000/live.mp3"
-                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'white', border: '1px solid var(--border-color)', padding: '8px', borderRadius: '2px', outline: 'none', width: '100%' }}
+                      placeholder="Nome da fileira..." 
+                      value={newChannelName}
+                      onChange={e => setNewChannelName(e.target.value)}
+                      style={{ flex: 1, backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', padding: '8px 12px', borderRadius: '6px', color: '#fff' }}
                     />
-                    <label style={{ marginTop: '10px' }}>Banner de Fundo (PNG/JPG):</label>
-                    <div style={{ display: 'flex', gap: '10px' }}>
-                      <input 
-                        type="text" 
-                        value={bannerUrl} 
-                        onChange={(e) => setBannerUrl(e.target.value)}
-                        placeholder="URL da imagem ou caminho no PC"
-                        style={{ backgroundColor: 'var(--bg-tertiary)', color: 'white', border: '1px solid var(--border-color)', padding: '8px', borderRadius: '2px', outline: 'none', flex: 1 }}
-                      />
-                      <button
-                        className="btn-primary"
-                        style={{ padding: '0 15px', borderRadius: '2px', cursor: 'pointer', border: 'none', color: 'white' }}
-                        onClick={async () => {
-                          try {
-                            // @ts-ignore
-                            const ipcRenderer = window.require ? window.require('electron').ipcRenderer : null;
-                            if (ipcRenderer) {
-                              const filePath = await ipcRenderer.invoke('select-image-file');
-                              if (filePath) setBannerUrl(filePath);
-                            } else {
-                              alert('Abra o aplicativo via Electron para selecionar arquivos locais.');
-                            }
-                          } catch (e) { alert('Erro ao selecionar imagem: ' + e); }
-                        }}
-                      >Procurar...</button>
-                    </div>
-                  </>
-                )}
+                    <button onClick={handleAddChannel} className="btn-primary" style={{ padding: '0 15px' }}>+</button>
+                 </div>
+                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {channels.map(c => (
+                      <div key={c.id} style={{ padding: '12px', backgroundColor: 'var(--bg-tertiary)', borderRadius: '8px', border: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                         <span style={{ fontSize: '13px' }}>{c.name}</span>
+                         {channels.length > 1 && (
+                           <button onClick={() => setChannels(channels.filter(ch => ch.id !== c.id))} style={{ background: 'none', border: 'none', color: '#555', cursor: 'pointer' }}>✕</button>
+                         )}
+                      </div>
+                    ))}
+                 </div>
+               </div>
 
-                <label style={{ marginTop: '15px' }}>Horário de Início:</label>
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <input 
-                    type="date" 
-                    value={selectedDate} 
-                    onChange={(e) => setSelectedDate(e.target.value)}
-                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'white', border: '1px solid var(--border-color)', padding: '8px', borderRadius: '2px', outline: 'none', flex: 1 }}
-                  />
-                  <input 
-                    type="time" 
-                    value={selectedTime} 
-                    onChange={(e) => setSelectedTime(e.target.value)}
-                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'white', border: '1px solid var(--border-color)', padding: '8px', borderRadius: '2px', outline: 'none', width: '100px' }}
-                  />
-                </div>
-                
-                <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '5px' }}>
-                  {times.map(t => (
-                    <button 
-                      key={t} 
-                      onClick={() => setSelectedTime(t)}
-                      style={{ 
-                        backgroundColor: selectedTime === t ? 'var(--accent-color)' : 'var(--bg-tertiary)', 
-                        color: 'white', 
-                        border: '1px solid var(--border-color)', 
-                        padding: '4px 8px', 
-                        borderRadius: '2px', 
-                        fontSize: '12px',
-                        cursor: 'pointer',
-                        transition: '0.2s'
-                      }}
-                    >
-                      {t}
-                    </button>
-                  ))}
-                </div>
-                
-                <button className="btn-connect" style={{ marginTop: '20px', backgroundColor: 'var(--accent-color)' }} onClick={handleAddProgram}>
-                  + Agendar Vídeo
-                </button>
-              </div>
             </div>
           </div>
         )}
@@ -1684,7 +1750,13 @@ function App() {
               try {
                 // @ts-ignore
                 const ipcRenderer = window.require ? window.require('electron').ipcRenderer : null;
-                if (!ipcRenderer) return alert('Erro: Electron IPC não encontrado.');
+                if (!ipcRenderer) {
+                  // Simular modo streaming no navegador para preview local
+                  alert('⚡ MODO PREVIEW: A transmissão ao vivo real requer o aplicativo Electron instalado.\n\nNo modo navegador (localhost), você pode usar o MCR Pro em modo preview.\n\nPara transmitir ao vivo, execute: npm run electron');
+                  setIsStreaming(true);
+                  lastLiveProgramId.current = null;
+                  return;
+                }
 
                 let finalPath = null;
                 let programTitle = 'MCR_PRO';
@@ -1724,7 +1796,10 @@ function App() {
               try {
                 // @ts-ignore
                 const ipcRenderer = window.require ? window.require('electron').ipcRenderer : null;
-                if (!ipcRenderer) return;
+                if (!ipcRenderer) {
+                  setIsStreaming(false);
+                  return;
+                }
                 await ipcRenderer.invoke('stop-stream');
                 setIsStreaming(false);
               } catch (e) { alert('Erro ao Parar: ' + e); }
@@ -1793,371 +1868,176 @@ function App() {
         )}
 
         {activeTab === 'live' && (
-          <div style={{ flex: 1, backgroundColor: '#06060a', display: 'flex', flexDirection: 'column', overflowY: 'auto', padding: '10px', gap: '10px', fontFamily: 'monospace' }}>
+          <div className="fade-in" style={{ flex: 1, backgroundColor: '#050508', display: 'flex', overflow: 'hidden' }}>
             
-            {/* Master Control Toolbar */}
-            <div style={{ height: '60px', backgroundColor: '#1a1a24', border: '1px solid #2a2a35', display: 'flex', alignItems: 'center', padding: '0 20px', justifyContent: 'space-between', borderRadius: '4px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-                <div style={{ fontSize: '22px', fontWeight: '900', color: '#646cff', letterSpacing: '3px' }}>STREAM_ENGINE <span style={{ color: '#fff', fontSize: '10px', opacity: 0.5 }}>ULTRA_X</span></div>
-                <div style={{ width: '2px', height: '30px', backgroundColor: '#2a2a35' }}></div>
-                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                  <span style={{ fontSize: '10px', color: '#555' }}>MASTER CLOCK</span>
-                  <span style={{ fontSize: '18px', color: '#fff' }}>{currentTimeTick.toLocaleTimeString('pt-BR', { hour12: false })}</span>
-                </div>
-                <div style={{ width: '2px', height: '30px', backgroundColor: '#2a2a35' }}></div>
-                <div 
-                  onClick={() => setAutoFallback(!autoFallback)}
-                  style={{ 
-                    display: 'flex', 
-                    flexDirection: 'column', 
-                    cursor: 'pointer',
-                    padding: '5px 10px',
-                    borderRadius: '4px',
-                    backgroundColor: autoFallback ? 'rgba(100, 108, 255, 0.1)' : 'transparent',
-                    border: autoFallback ? '1px solid #646cff' : '1px solid transparent',
-                    transition: '0.3s'
-                  }}
-                >
-                  <span style={{ fontSize: '9px', color: autoFallback ? '#646cff' : '#555' }}>PLAYOUT AUTOMÁTICO</span>
-                  <span style={{ fontSize: '12px', color: autoFallback ? '#fff' : '#444', fontWeight: 'bold' }}>
-                    {autoFallback ? 'HABILITADO' : 'DESATIVADO'}
-                  </span>
-                </div>
-              </div>
+            {/* Left Column: Player and Master Controls */}
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', borderRight: '1px solid var(--border-color)' }}>
               
-              <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '9px', color: '#555' }}>PRÓXIMO EM</div>
-                  <div style={{ fontSize: '16px', color: nextProgram ? '#facc15' : '#444' }}>{getNextCountdown()}</div>
-                </div>
-                {!isStreaming ? (
-                  <button onClick={async () => {
-                      if (!streamKey) return alert('Configure a Chave de Transmissão na aba Conexões antes de começar.');
-                      try {
-                        // @ts-ignore
-                        const ipcRenderer = window.require ? window.require('electron').ipcRenderer : null;
-                        if (!ipcRenderer) return alert('Erro: Electron IPC não encontrado.');
-                        const isWebRadioProgram = liveProgram?.video?.platform === 'webradio';
-                        
-                        let finalPath = isWebRadioProgram ? null : (liveProgram?.video?.id || null);
-                        if (liveProgram?.id === 'restream-active' && restreamUrl) {
-                          finalPath = restreamUrl;
-                          if (restreamUrl.includes('youtube.com') || restreamUrl.includes('youtu.be') || restreamUrl.includes('twitch.tv')) {
-                            const result = await ipcRenderer.invoke('resolve-youtube-url', { url: restreamUrl });
-                            if (result.success) {
-                              finalPath = `__ytlive__:${result.url}`;
-                            } else {
-                              return alert('Erro ao resolver URL da live: ' + result.error);
-                            }
-                          }
-                        }
-
-                        const result = await ipcRenderer.invoke('start-stream', {
-                          videoPath: finalPath,
-                          offsetSeconds: isLive && !isWebRadioProgram && liveProgram?.id !== 'restream-active' ? offsetSeconds : 0,
-                          rtmpUrl,
-                          streamKey: streamKey.trim(),
-                          mode: isWebRadioProgram ? 'radio' : (isLive ? 'video' : 'radio'),
-                          overlayConfig,
-                          programTitle: liveProgram?.video?.title || '',
-                          fallbackUrl: liveProgram?.video?.radioUrl || fallbackRadioUrl,
-                          fallbackBanner: liveProgram?.video?.bannerUrl || fallbackBannerUrl,
-                          hwAccel
-                        });
-                        if (result.success) {
-                          setIsStreaming(true);
-                          lastLiveProgramId.current = liveProgram?.id || null;
-                        }
-                      } catch (e) { alert('Erro no Stream: ' + e); }
-                    }}
-                    style={{ backgroundColor: '#dc2626', color: 'white', border: 'none', padding: '10px 24px', fontWeight: 'bold', cursor: 'pointer', fontSize: '13px', borderRadius: '2px', boxShadow: '0 0 15px rgba(220,38,38,0.3)' }}>● INICIAR LIVE</button>
+              <div style={{ flex: 1, position: 'relative', backgroundColor: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {isLive && liveProgram ? (
+                  liveProgram.video.platform === 'camera' ? <CameraView key={`camera-${liveProgram.id}`} /> :
+                  liveProgram.video.platform === 'webradio' ? <WebRadioView key={`radio-${liveProgram.id}`} radioUrl={liveProgram.video.radioUrl} bannerUrl={liveProgram.video.bannerUrl || fallbackBannerUrl} radioVolume={radioVolume} /> :
+                  liveProgram.video.platform === 'youtube' ? <iframe key={`yt-${liveProgram.id}`} src={`https://www.youtube.com/embed/${liveProgram.video.id}${liveProgram.video.id.includes('?') ? '&' : '?'}autoplay=1&mute=1&controls=0&start=${Math.floor(offsetSeconds)}`} style={{ width: '100%', height: '100%', border: 'none' }} allow="autoplay" /> :
+                  liveProgram.video.platform === 'twitch' ? <iframe key={`tw-${liveProgram.id}`} src={`https://player.twitch.tv/?channel=${liveProgram.video.id}&parent=localhost&muted=true`} style={{ width: '100%', height: '100%', border: 'none' }} allow="autoplay" /> :
+                  <video ref={videoRef} key={`video-${liveProgram.id}`} src={liveProgram.video.id} autoPlay muted style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
                 ) : (
-                  <button onClick={async () => {
-                      try {
+                  <div style={{ textAlign: 'center', opacity: 0.2 }}>
+                    <div style={{ fontSize: '80px', marginBottom: '15px' }}>📺</div>
+                    <div style={{ fontSize: '20px', fontWeight: '900', letterSpacing: '4px' }}>ESTAÇÃO_EM_ESPERA</div>
+                    <div style={{ fontSize: '10px', marginTop: '10px' }}>AGUARDANDO PROGRAMAÇÃO OU AUTO DJ</div>
+                  </div>
+                )}
+
+                {/* Overlays on top of the live player */}
+                {overlayConfig.enabled && (
+                  <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+                    {overlayConfig.layers.filter(l => l.enabled).map(layer => {
+                       if (layer.type === 'image' && layer.imageUrl) return <img key={layer.id} src={layer.imageUrl} style={{ position:'absolute', left:`${layer.x}%`, top:`${layer.y}%`, width:`${layer.imageWidth}%` }} />;
+                       return null;
+                    })}
+                  </div>
+                )}
+
+                <div style={{ position: 'absolute', top: '20px', left: '20px', backgroundColor: isStreaming ? 'var(--accent-danger)' : '#111', color: '#fff', padding: '6px 12px', borderRadius: '4px', fontSize: '11px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px', border: '1px solid rgba(255,255,255,0.1)' }}>
+                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#fff', animation: isStreaming ? 'pulse 1s infinite' : 'none' }} />
+                  {isStreaming ? 'TRANSMISSÃO AO VIVO' : 'SINAL DE PREVIEW'}
+                </div>
+              </div>
+
+              <div style={{ height: '120px', backgroundColor: 'var(--bg-secondary)', borderTop: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', padding: '0 40px', gap: '40px' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '6px', fontWeight: 'bold', letterSpacing: '1px' }}>PROGRAMA ATUAL</div>
+                  <div style={{ fontSize: '22px', fontWeight: '900', color: isLive ? '#fff' : '#333', letterSpacing: '-0.5px' }}>
+                    {isLive ? liveProgram?.video?.title : 'NENHUMA FONTE ATIVA'}
+                  </div>
+                  {isLive && (
+                    <div style={{ marginTop: '8px', display: 'flex', gap: '15px', alignItems: 'center' }}>
+                      <div style={{ width: '200px', height: '4px', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: '2px' }}>
+                        <div style={{ height: '100%', backgroundColor: 'var(--accent-primary)', width: `${(offsetSeconds / ((liveProgram?.durationMinutes || 1) * 60)) * 100}%` }} />
+                      </div>
+                      <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
+                        -{formatTime(Math.max(0, ((liveProgram?.durationMinutes || 0) * 60) - offsetSeconds))}
+                      </span>
+                    </div>
+                  )}
+                </div>
+                
+                <div style={{ display: 'flex', gap: '12px' }}>
+                  {!isStreaming ? (
+                    <button 
+                      className="btn-primary" 
+                      onClick={async () => {
+                        if (!streamKey) return alert('Configure a Chave de Transmissão.');
+                        try {
+                          // @ts-ignore
+                          const ipcRenderer = window.require ? window.require('electron').ipcRenderer : null;
+                          if (!ipcRenderer) {
+                            // Simular transmissão no navegador para preview local
+                            alert('⚡ MODO PREVIEW: A transmissão ao vivo real requer o aplicativo Electron instalado.\n\nNo modo navegador (localhost), você pode visualizar a grade e o preview normalmente.\n\nPara transmitir, use o aplicativo StreamTV instalado ou execute: npm run electron');
+                            return;
+                          }
+                          const result = await ipcRenderer.invoke('start-stream', {
+                            videoPath: liveProgram?.video?.id || null,
+                            offsetSeconds: liveProgram?.video?.platform === 'webradio' ? 0 : offsetSeconds,
+                            rtmpUrl, streamKey: streamKey.trim(), mode: 'video', overlayConfig, 
+                            programTitle: liveProgram?.video?.title || 'MCR', fallbackUrl: fallbackRadioUrl, fallbackBanner: fallbackBannerUrl, hwAccel
+                          });
+                          if (result.success) setIsStreaming(true);
+                        } catch (e) { alert('Erro: ' + e); }
+                      }}
+                      style={{ height: '54px', padding: '0 30px', fontSize: '14px', backgroundColor: 'var(--accent-danger)', fontWeight: 'bold' }}
+                    >
+                      ● INICIAR TRANSMISSÃO
+                    </button>
+                  ) : (
+                    <button 
+                      className="btn-primary" 
+                      onClick={async () => {
                         // @ts-ignore
                         const ipcRenderer = window.require ? window.require('electron').ipcRenderer : null;
-                        if (!ipcRenderer) return;
-                        await ipcRenderer.invoke('stop-stream');
+                        if (ipcRenderer) await ipcRenderer.invoke('stop-stream');
                         setIsStreaming(false);
-                      } catch (e) { alert('Erro ao Parar: ' + e); }
-                    }}
-                    style={{ backgroundColor: '#111', color: '#ef4444', border: '1px solid #ef4444', padding: '10px 24px', fontWeight: 'bold', cursor: 'pointer', fontSize: '13px', borderRadius: '2px' }}>FORA DO AR</button>
-                )}
-              </div>
-            </div>
-
-            {/* Main Visual Dashboard */}
-            <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 380px', gap: '10px', overflow: 'hidden' }}>
-              
-              {/* Left Side: Monitors and Controls */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', overflow: 'hidden' }}>
-                
-                {/* Monitors Row (PGM / PVW) */}
-                <div style={{ minHeight: '300px', flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                  
-                  {/* PROGRAM MONITOR (PGM) */}
-                  <div style={{ backgroundColor: '#000', border: '1px solid #ef4444', position: 'relative', display: 'flex', flexDirection: 'column' }}>
-                    <div style={{ position: 'absolute', top: 0, left: 0, backgroundColor: '#ef4444', color: '#fff', padding: '4px 12px', fontSize: '11px', fontWeight: 'bold', zIndex: 15 }}>PROGRAMA (PGM)</div>
-                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', position: 'relative' }}>
-                      {isLive && liveProgram ? (
-                        liveProgram.video.platform === 'camera' ? (
-                          <CameraView key={`camera-${liveProgram.id}`} />
-                        ) : liveProgram.video.platform === 'webradio' ? (
-                          <WebRadioView key={`radio-${liveProgram.id}`} radioUrl={liveProgram.video.radioUrl} bannerUrl={liveProgram.video.bannerUrl || fallbackBannerUrl} />
-                        ) : (() => {
-                          const url = liveProgram.video.id || '';
-                          let ytId = '';
-                          if (url.includes('youtu.be/')) ytId = url.split('youtu.be/')[1].split('?')[0];
-                          else if (url.includes('v=')) ytId = url.split('v=')[1].split('&')[0];
-                          else if (url.includes('youtube.com/live/')) ytId = url.split('live/')[1].split('?')[0];
-                          
-                          let twCh = '';
-                          if (url.includes('twitch.tv/')) twCh = url.split('twitch.tv/')[1].split('?')[0];
-
-                          if (ytId) return <iframe key={`yt-${liveProgram.id}`} src={`https://www.youtube.com/embed/${ytId}?autoplay=1&mute=1&controls=0`} style={{ width: '100%', height: '100%', border: 'none', pointerEvents: 'none' }} allow="autoplay" />;
-                          if (twCh) return <iframe key={`tw-${liveProgram.id}`} src={`https://player.twitch.tv/?channel=${twCh}&parent=localhost&muted=true`} style={{ width: '100%', height: '100%', border: 'none', pointerEvents: 'none' }} />;
-                          return <video key={`video-${liveProgram.id}`} ref={videoRef} autoPlay muted loop style={{ width: '100%', height: '100%', objectFit: 'contain' }} src={url} />;
-                        })()
-                      ) : fallbackRadioUrl ? (
-                        <WebRadioView key="fallback-radio" radioUrl={fallbackRadioUrl} bannerUrl={fallbackBannerUrl} />
-                      ) : (
-                        <div key="idle" className="screensaver" style={{ transform: 'scale(0.5)' }}><div className="screensaver-title">IDLE</div></div>
-                      )}
-
-                      {/* LIVE OVERLAY ON PGM MONITOR */}
-                      {overlayConfig.enabled && (
-                        <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 10 }}>
-                          {(overlayConfig.layers || []).filter(l => l.enabled).map(layer => {
-                            if (layer.type === 'image') {
-                              return layer.imageUrl && (
-                                <img 
-                                  key={layer.id}
-                                  src={layer.imageUrl} 
-                                  style={{ 
-                                    position: 'absolute', 
-                                    left: `${layer.x}%`, 
-                                    top: `${layer.y}%`, 
-                                    width: `${layer.imageWidth || 20}%`, 
-                                    filter: 'drop-shadow(0 2px 6px rgba(0,0,0,0.8))' 
-                                  }} 
-                                />
-                              );
-                            }
-
-                            const fs = `clamp(8px, ${layer.fontSize / 16 * 1.0}vw, ${layer.fontSize * 0.5}px)`;
-                            return (
-                              <div
-                                key={layer.id}
-                                style={{
-                                  position: 'absolute',
-                                  left: layer.bgFullWidth ? 0 : `${layer.x}%`,
-                                  top: `${layer.y}%`,
-                                  width: layer.bgFullWidth ? '100%' : undefined,
-                                  color: layer.color,
-                                  fontSize: fs,
-                                  padding: layer.bgFullWidth ? `2px 10px 2px calc(${layer.x}% + 10px)` : '1px 5px',
-                                  backgroundColor: layer.bgEnabled ? (layer.bgFullWidth ? 'rgba(0,0,0,0.7)' : 'rgba(0,0,0,0.5)') : 'transparent',
-                                  whiteSpace: 'nowrap',
-                                  fontFamily: layer.type === 'clock' ? 'monospace' : 'inherit',
-                                  overflow: 'hidden'
-                                }}
-                              >
-                                {layer.type === 'clock'
-                                  ? currentTimeTick.toLocaleTimeString()
-                                  : layer.type === 'ticker'
-                                  ? <span style={{ display:'inline-block', animation:`ticker-scroll ${Math.max(5, 300/((layer.scrollSpeed||150)/100))}s linear infinite`, whiteSpace:'nowrap' }}>{layer.text}</span>
-                                  : layer.text}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                      
-                      {isLive && liveProgram && liveProgram.video.platform !== 'camera' && (
-                        <div style={{ position: 'absolute', top: '40px', right: '10px', backgroundColor: 'rgba(0,0,0,0.7)', color: '#ef4444', padding: '5px 10px', borderRadius: '4px', border: '1px solid #ef4444', fontSize: '14px', fontWeight: 'bold' }}>
-                          -{formatTime(Math.max(0, (liveProgram.durationMinutes * 60) - offsetSeconds))}
-                        </div>
-                      )}
-                    </div>
-                    <div style={{ height: '35px', backgroundColor: 'rgba(239,68,68,0.1)', borderTop: '1px solid #ef4444', display: 'flex', alignItems: 'center', padding: '0 15px', color: '#fff', fontSize: '11px' }}>
-                      {isLive ? liveProgram?.video.title : 'NENHUMA FONTE SELECIONADA'}
-                    </div>
-                  </div>
-
-                  {/* PREVIEW MONITOR (PVW) */}
-                  <div style={{ backgroundColor: '#000', border: '1px solid #4ade80', position: 'relative', display: 'flex', flexDirection: 'column' }}>
-                    <div style={{ position: 'absolute', top: 0, left: 0, backgroundColor: '#4ade80', color: '#000', padding: '4px 12px', fontSize: '11px', fontWeight: 'bold', zIndex: 15 }}>PREVIEW (PVW)</div>
-                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', backgroundColor: '#050505' }}>
-                      {nextProgram ? (
-                        <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-                          <img src={nextProgram.video.thumbnail} style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: 0.4, filter: 'grayscale(1)' }} alt="preview" />
-                          <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '20px' }}>
-                            <div style={{ fontSize: '12px', color: '#4ade80', marginBottom: '5px' }}>PRÓXIMO @ {nextProgram.startTime}</div>
-                            <div style={{ fontSize: '18px', color: '#fff', fontWeight: 'bold' }}>{nextProgram.video.title}</div>
-                          </div>
-                        </div>
-                      ) : (
-                        <div style={{ fontSize: '12px', color: '#333' }}>SEM DADOS DE PREVIEW</div>
-                      )}
-                    </div>
-                    <div style={{ height: '35px', backgroundColor: 'rgba(74,222,128,0.1)', borderTop: '1px solid #4ade80', display: 'flex', alignItems: 'center', padding: '0 15px', color: '#4ade80', fontSize: '11px' }}>
-                      {nextProgram ? `SEGUINTE: ${nextProgram.video.title}` : 'IDLE'}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Switcher & Audio Deck */}
-                <div style={{ height: '180px', display: 'grid', gridTemplateColumns: '1fr 200px', gap: '10px' }}>
-                  
-                  {/* Transition Controls */}
-                  <div style={{ backgroundColor: '#1a1a24', border: '1px solid #2a2a35', padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                    <div style={{ fontSize: '10px', color: '#646cff', fontWeight: 'bold' }}>CONTROLES DE TRANSMISSÃO</div>
-                    <div style={{ display: 'flex', gap: '10px', flex: 1 }}>
-                      <button 
-                        onClick={() => {
-                          if (nextProgram) {
-                            if (liveProgram && window.confirm('Deseja pular o programa atual?')) {
-                              handleDeleteProgram(liveProgram.id);
-                            }
-                          } else {
-                            alert('Nenhum programa seguinte na grade.');
-                          }
-                        }}
-                        style={{ flex: 1, backgroundColor: '#222', border: '1px solid #444', color: '#fff', borderRadius: '4px', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
-                        <span style={{ fontSize: '20px' }}>⏭</span>
-                        <span style={{ fontSize: '9px' }}>PULAR / PRÓX</span>
-                      </button>
-                      <button 
-                        onClick={async () => {
-                          if (!isStreaming) return alert('Inicie a Live primeiro.');
-                          try {
-                            // @ts-ignore
-                            const ipcRenderer = window.require ? window.require('electron').ipcRenderer : null;
-                            if (!ipcRenderer) return;
-                            await ipcRenderer.invoke('switch-stream', {
-                              videoPath: liveProgram?.video?.id || null,
-                              offsetSeconds,
-                              overlayConfig,
-                              programTitle: liveProgram?.video?.title || '',
-                              fallbackUrl: fallbackRadioUrl,
-                              fallbackBanner: fallbackBannerUrl,
-                              mode: isLive ? 'video' : 'radio',
-                              hwAccel
-                            });
-                            alert('PGM Recarregado!');
-                          } catch (e) { alert('Erro ao Recarregar: ' + e); }
-                        }}
-                        style={{ flex: 1, backgroundColor: '#222', border: '1px solid #444', color: '#fff', borderRadius: '4px', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
-                        <span style={{ fontSize: '20px' }}>🔄</span>
-                        <span style={{ fontSize: '9px' }}>RECARREGAR PGM</span>
-                      </button>
-                      <button 
-                        onClick={() => setOverlayConfig(p => ({ ...p, enabled: !p.enabled }))}
-                        style={{ flex: 1, backgroundColor: overlayConfig.enabled ? '#7c3aed' : '#222', border: '1px solid #7c3aed', color: '#fff', borderRadius: '4px', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '5px' }}
-                      >
-                        <span style={{ fontSize: '20px' }}>🎨</span>
-                        <span style={{ fontSize: '9px' }}>ALTERNAR OVERLAY</span>
-                      </button>
-                    </div>
-                    <div style={{ height: '4px', backgroundColor: '#000', borderRadius: '2px', overflow: 'hidden' }}>
-                      <div style={{ height: '100%', backgroundColor: '#646cff', width: isLive ? `${(offsetSeconds / ((liveProgram?.durationMinutes || 1) * 60)) * 100}%` : '0%' }} />
-                    </div>
-                  </div>
-
-                  {/* Audio Master VU */}
-                  <div style={{ backgroundColor: '#000', border: '1px solid #2a2a35', padding: '10px', display: 'flex', gap: '6px' }}>
-                    {[1, 2].map(i => (
-                      <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column-reverse', gap: '1px' }}>
-                        {Array.from({ length: 30 }).map((_, j) => {
-                          const level = j / 30;
-                          let color = '#4ade80';
-                          if (level > 0.85) color = '#ef4444';
-                          else if (level > 0.65) color = '#facc15';
-                          return <div key={j} style={{ height: '4px', backgroundColor: isLive ? color : '#111', opacity: isLive ? (Math.random() > 0.2 ? 1 : 0.2) : 0.1 }} />
-                        })}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* Right Side: Log & Scheduler */}
-              <div style={{ backgroundColor: '#1a1a24', border: '1px solid #2a2a35', display: 'flex', flexDirection: 'column', overflow: 'hidden', borderRadius: '4px' }}>
-                <div style={{ padding: '12px', backgroundColor: '#14141d', borderBottom: '1px solid #2a2a35', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: '11px', fontWeight: 'bold', color: '#646cff' }}>SYSTEM_PLAYOUT_LOG</span>
-                  <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                    <span style={{ fontSize: '11px', color: '#444' }}>{viewDate}</span>
-                    <button 
-                      onClick={() => {
-                        const logs = scheduledPrograms.filter(p => !p.date || p.date === viewDate).sort((a,b) => a.startTime.localeCompare(b.startTime));
-                        let csv = "DATA,HORA_INICIO,EVENTO_EXIBIDO\n";
-                        logs.forEach(l => csv += `${viewDate},${l.startTime},"${l.video.title}"\n`);
-                        const blob = new Blob([csv], { type: 'text/csv' });
-                        const url = window.URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = `comprovante_exibicao_${viewDate}.csv`;
-                        a.click();
                       }}
-                      style={{ background: '#118040', border: 'none', color: '#fff', fontSize: '9px', padding: '4px 8px', borderRadius: '2px', cursor: 'pointer', fontWeight: 'bold' }}>
-                      EXPORTAR CSV
+                      style={{ height: '54px', padding: '0 30px', fontSize: '14px', backgroundColor: '#111', border: '1px solid var(--accent-danger)', color: 'var(--accent-danger)', fontWeight: 'bold' }}
+                    >
+                      FORA DO AR (PARAR)
                     </button>
-                  </div>
+                  )}
+                  <button 
+                    onClick={() => {
+                      if (nextProgram && window.confirm('Pular para o próximo programa?')) {
+                        handleDeleteProgram(liveProgram!.id);
+                      }
+                    }}
+                    style={{ height: '54px', width: '54px', backgroundColor: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)', borderRadius: '12px', cursor: 'pointer', color: '#fff', fontSize: '20px' }}
+                  >⏭</button>
                 </div>
-                <div style={{ flex: 1, overflowY: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '10px' }}>
-                    <thead>
-                      <tr style={{ color: '#444', textAlign: 'left', borderBottom: '1px solid #222' }}>
-                        <th style={{ padding: '8px' }}>ST</th>
-                        <th style={{ padding: '8px' }}>TIME</th>
-                        <th style={{ padding: '8px' }}>EVENT</th>
-                      </tr>
-                    </thead>
-                    <tbody style={{ color: '#888' }}>
-                      {[...scheduledPrograms]
-                        .filter(p => !p.date || p.date === viewDate)
-                        .sort((a,b) => a.startTime.localeCompare(b.startTime))
-                        .map(p => {
-                          const isNow = liveProgram?.id === p.id;
-                          const isNext = nextProgram?.id === p.id;
-                          return (
-                            <tr key={p.id} style={{ backgroundColor: isNow ? 'rgba(239,68,68,0.1)' : isNext ? 'rgba(74,222,128,0.05)' : 'transparent' }}>
-                              <td style={{ padding: '8px', color: isNow ? '#ef4444' : isNext ? '#4ade80' : '#444' }}>{isNow ? 'LIVE' : isNext ? 'NEXT' : 'WAIT'}</td>
-                              <td style={{ padding: '8px' }}>{p.startTime}</td>
-                              <td style={{ padding: '8px', color: isNow ? '#fff' : isNext ? '#ddd' : '#888', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '180px' }}>{p.video.title}</td>
-                            </tr>
-                          );
-                        })}
-                    </tbody>
-                  </table>
-                </div>
-                <div style={{ padding: '15px', backgroundColor: '#000', borderTop: '1px solid #2a2a35' }}>
-                   <div style={{ fontSize: '9px', color: '#646cff', marginBottom: '4px' }}>ENGINE STATUS</div>
-                   <div style={{ fontSize: '12px', color: isStreaming ? '#4ade80' : '#ef4444' }}>
-                     {isStreaming ? 'SYSTEM_NOMINAL_100%' : 'ENGINE_OFFLINE'}
-                   </div>
-                </div>
+              </div>
+            </div>
 
-                {/* Real-time FFmpeg Console */}
-                <div style={{ height: '180px', backgroundColor: '#050505', borderTop: '2px solid #1a1a24', display: 'flex', flexDirection: 'column' }}>
-                  <div style={{ padding: '6px 12px', backgroundColor: '#0a0a0a', fontSize: '10px', color: '#444', borderBottom: '1px solid #111', display: 'flex', justifyContent: 'space-between' }}>
-                    <span>CONSOLE_OUTPUT</span>
-                    <button onClick={() => setStreamLogs([])} style={{ background: 'none', border: 'none', color: '#646cff', fontSize: '9px', cursor: 'pointer' }}>Limpar</button>
+            {/* Right Column: Console & EPG */}
+            <div style={{ width: '420px', display: 'flex', flexDirection: 'column', backgroundColor: 'var(--bg-secondary)' }}>
+              
+              <div style={{ padding: '24px', borderBottom: '1px solid var(--border-color)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                  <h3 style={{ fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 'bold', letterSpacing: '1px' }}>ESTADO DO SISTEMA</h3>
+                  <div style={{ padding: '4px 10px', backgroundColor: isStreaming ? 'rgba(239,68,68,0.1)' : 'rgba(255,255,255,0.05)', color: isStreaming ? 'var(--accent-danger)' : '#555', borderRadius: '4px', fontSize: '10px', fontWeight: 'bold' }}>
+                    {isStreaming ? 'ONLINE' : 'OFFLINE'}
                   </div>
-                  <div style={{ flex: 1, overflowY: 'auto', padding: '8px', fontFamily: 'monospace', fontSize: '10px', color: '#bbb', lineHeight: '1.4' }}>
-                    {streamLogs.length === 0 ? (
-                      <div style={{ color: '#333' }}>Aguardando início da transmissão...</div>
-                    ) : (
-                      streamLogs.map((log, i) => (
-                        <div key={i} style={{ borderBottom: '1px solid #0a0a0a', paddingBottom: '2px', marginBottom: '2px' }}>{log}</div>
-                      ))
-                    )}
-                    <div ref={logEndRef} />
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                  <div className="glass-panel" style={{ padding: '15px', border: '1px solid rgba(255,255,255,0.03)' }}>
+                    <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '5px' }}>MASTER CLOCK</div>
+                    <div style={{ fontSize: '22px', fontWeight: 'bold', fontFamily: 'JetBrains Mono, monospace' }}>
+                      {currentTimeTick.toLocaleTimeString('pt-BR', { hour12: false })}
+                    </div>
+                  </div>
+                  <div className="glass-panel" style={{ padding: '15px', border: '1px solid rgba(255,255,255,0.03)' }}>
+                    <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '5px' }}>PRÓXIMA TROCA</div>
+                    <div style={{ fontSize: '22px', fontWeight: 'bold', color: 'var(--accent-secondary)', fontFamily: 'JetBrains Mono, monospace' }}>
+                      {getNextCountdown()}
+                    </div>
                   </div>
                 </div>
               </div>
 
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                <div style={{ padding: '12px 24px', fontSize: '10px', color: 'var(--text-secondary)', fontWeight: 'bold', backgroundColor: 'rgba(0,0,0,0.1)', borderBottom: '1px solid var(--border-color)' }}>
+                  CONSOLE DE SAÍDA (FFMPEG)
+                </div>
+                <div style={{ flex: 1, overflowY: 'auto', padding: '20px', fontFamily: 'JetBrains Mono, monospace', fontSize: '11px', color: '#4ade80', backgroundColor: '#000', lineHeight: '1.5' }}>
+                  {streamLogs.length === 0 ? (
+                    <div style={{ color: '#222', fontStyle: 'italic' }}>Aguardando logs do backend...</div>
+                  ) : (
+                    streamLogs.map((log, i) => <div key={i} style={{ marginBottom: '4px', opacity: 0.8 }}>{log}</div>)
+                  )}
+                  <div ref={logEndRef} />
+                </div>
+                <div style={{ padding: '10px 20px', backgroundColor: '#000', display: 'flex', justifyContent: 'flex-end' }}>
+                   <button onClick={() => setStreamLogs([])} style={{ background: 'none', border: 'none', color: '#555', fontSize: '10px', cursor: 'pointer' }}>Limpar Console</button>
+                </div>
+              </div>
+
+              <div style={{ padding: '24px', backgroundColor: 'var(--bg-primary)', borderTop: '1px solid var(--border-color)' }}>
+                <h4 style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '16px', fontWeight: 'bold' }}>PAINEL DE CONTROLE RÁPIDO</h4>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
+                    <span style={{ fontSize: '13px' }}>Playout Automático</span>
+                    <input type="checkbox" checked={autoFallback} onChange={e => setAutoFallback(e.target.checked)} />
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
+                    <span style={{ fontSize: '13px' }}>Aceleração de Hardware</span>
+                    <input type="checkbox" checked={hwAccel} onChange={e => setHwAccel(e.target.checked)} />
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
+                    <span style={{ fontSize: '13px' }}>Camada de Overlay</span>
+                    <input type="checkbox" checked={overlayConfig.enabled} onChange={e => setOverlayConfig(p => ({ ...p, enabled: e.target.checked }))} />
+                  </label>
+                </div>
+              </div>
+
             </div>
+
           </div>
         )}
         </ErrorBoundary>
