@@ -52,7 +52,15 @@ const CameraView: React.FC = () => {
 
 const WebRadioView: React.FC<{ radioUrl?: string; bannerUrl?: string; radioVolume?: number }> = ({ radioUrl, bannerUrl, radioVolume = 1 }) => {
   const [imgError, setImgError] = useState(false);
-  
+  const audioRef = useRef<HTMLAudioElement>(null);
+
+  // Atualizar volume via ref (propriedade JS, não atributo HTML)
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.volume = radioVolume;
+    }
+  }, [radioVolume]);
+
   // Converter caminho local para URL válida no Electron se necessário
   const getFullUrl = (url: string) => {
     if (!url) return '';
@@ -85,7 +93,7 @@ const WebRadioView: React.FC<{ radioUrl?: string; bannerUrl?: string; radioVolum
       {radioUrl && (
         <div style={{ position: 'absolute', bottom: '20px', zIndex: 10, width: '90%', textAlign: 'center' }}>
           <div style={{ color: '#aaa', fontSize: '12px', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '1px' }}>Sinal de Áudio Ativo</div>
-          <audio src={radioUrl} autoPlay loop style={{ width: '100%' }} volume={radioVolume} />
+          <audio ref={audioRef} src={radioUrl} autoPlay loop style={{ width: '100%' }} />
           <div style={{ height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', overflow: 'hidden', marginTop: '10px' }}>
             <div style={{ width: '100%', height: '100%', background: 'linear-gradient(90deg, #646cff, #ef4444)', animation: 'progress-shimmer 2s infinite' }} />
           </div>
