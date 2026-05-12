@@ -1799,8 +1799,7 @@ function App() {
                 // @ts-ignore
                 const ipcRenderer = window.require ? window.require('electron').ipcRenderer : null;
                 if (!ipcRenderer) {
-                  // Simular modo streaming no navegador para preview local
-                  alert('⚡ MODO PREVIEW: A transmissão ao vivo real requer o aplicativo Electron instalado.\n\nNo modo navegador (localhost), você pode usar o MCR Pro em modo preview.\n\nPara transmitir ao vivo, execute: npm run electron');
+                  // Modo navegador (Vercel/localhost): ativar preview sem Electron
                   setIsStreaming(true);
                   lastLiveProgramId.current = null;
                   return;
@@ -1980,8 +1979,7 @@ function App() {
                           // @ts-ignore
                           const ipcRenderer = window.require ? window.require('electron').ipcRenderer : null;
                           if (!ipcRenderer) {
-                            // Simular transmissão no navegador para preview local
-                            alert('⚡ MODO PREVIEW: A transmissão ao vivo real requer o aplicativo Electron instalado.\n\nNo modo navegador (localhost), você pode visualizar a grade e o preview normalmente.\n\nPara transmitir, use o aplicativo StreamTV instalado ou execute: npm run electron');
+                            // Modo navegador (Vercel/localhost): continua em modo preview sem Electron
                             return;
                           }
                           const result = await ipcRenderer.invoke('start-stream', {
